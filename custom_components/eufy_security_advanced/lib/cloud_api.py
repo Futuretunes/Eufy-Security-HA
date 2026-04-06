@@ -261,7 +261,11 @@ class EufyCloudApi:
         if not self._api_base:
             await self.discover_api_base()
 
-        encrypted_password = encrypt_api_data(self._password, self._shared_key)
+        # For login, always use the DEFAULT server public key to encrypt
+        # the password. The stored server key from a previous session is
+        # only valid for decrypting responses, not for a fresh login.
+        login_key = self._ecdh.compute_shared_secret(SERVER_PUBLIC_KEY_DEFAULT)
+        encrypted_password = encrypt_api_data(self._password, login_key)
 
         body: dict[str, Any] = {
             "ab": self._country,

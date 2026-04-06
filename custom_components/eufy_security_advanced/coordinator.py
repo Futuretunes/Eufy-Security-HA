@@ -106,8 +106,11 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             persistent_data=persistent,
         )
 
-        # Login with session conflict handling
-        await self._login_with_retry()
+        # Only login if we don't have a valid token
+        if not persistent.auth_token:
+            await self._login_with_retry()
+        else:
+            _LOGGER.debug("Using saved auth token, skipping login")
 
         # Fetch initial data
         await self._api.get_station_list()
