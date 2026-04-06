@@ -119,16 +119,30 @@ class EufyCamera(EufySecurityEntity, Camera):
         """
         d = self._device
         if d and d.last_event_pic_url:
+            url = d.last_event_pic_url
+            _LOGGER.debug("Fetching camera image for %s from %s", self._device_sn, url[:80])
             try:
                 from homeassistant.helpers.aiohttp_client import async_get_clientsession
                 session = async_get_clientsession(self.hass)
-                async with session.get(
-                    d.last_event_pic_url, timeout=10
-                ) as resp:
+                async with session.get(url, timeout=10) as resp:
                     if resp.status == 200:
                         self._last_image = await resp.read()
+                        _LOGGER.debug(
+                            "Got image for %s: %d bytes",
+                            self._device_sn, len(self._last_image),
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "Image fetch for %s returned HTTP %d",
+                            self._device_sn, resp.status,
+                        )
             except Exception:
-                _LOGGER.debug("Failed to fetch event image", exc_info=True)
+                _LOGGER.debug("Failed to fetch event image for %s", self._device_sn, exc_info=True)
+        else:
+            if d:
+                _LOGGER.debug("No event pic URL for %s", self._device_sn)
+            else:
+                _LOGGER.debug("Device %s not found in coordinator", self._device_sn)
 
         return self._last_image
 

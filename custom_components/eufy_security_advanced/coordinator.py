@@ -118,6 +118,20 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.stations = self._api.stations
         self.devices = self._api.devices
 
+        _LOGGER.info(
+            "Loaded %d stations, %d devices",
+            len(self.stations), len(self.devices),
+        )
+        for sn, dev in self.devices.items():
+            _LOGGER.info(
+                "  Device: %s (%s) type=%s camera=%s doorbell=%s",
+                dev.device_name, sn, dev.device_type.name,
+                dev.is_camera, dev.is_doorbell,
+            )
+
+        # Fetch latest event thumbnails so camera entities have a preview image
+        await self._api.fetch_latest_thumbnails()
+
         # Initialize P2P session pool
         from .p2p_manager import P2PSessionPool
         self.p2p_pool = P2PSessionPool(self)

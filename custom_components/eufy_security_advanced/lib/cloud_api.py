@@ -440,8 +440,12 @@ class EufyCloudApi:
                 try:
                     dt = DeviceType(device_type_val)
                 except ValueError:
-                    _LOGGER.warning("Unknown device type %d for %s", device_type_val, raw.get("device_sn"))
-                    continue
+                    # Don't skip unknown types — still create the device
+                    _LOGGER.warning(
+                        "Unknown device type %d for %s, treating as generic camera",
+                        device_type_val, raw.get("device_sn"),
+                    )
+                    dt = DeviceType.CAMERA
 
                 device = DeviceData(
                     device_sn=raw.get("device_sn", ""),
@@ -458,12 +462,39 @@ class EufyCloudApi:
                     raw=raw,
                 )
 
+                # Extract cover/event image URL from cloud data
+                cover = (
+                    raw.get("cover_path")
+                    or raw.get("pic_url")
+                    or raw.get("event_pic_url")
+                    or raw.get("last_pic_url")
+                    or ""
+                )
+                if cover:
+                    device.last_event_pic_url = cover
+
+                # WiFi RSSI
+                wifi = raw.get("wifi_rssi") or raw.get("wifiRssi") or 0
+                try:
+                    device.wifi_rssi = int(wifi)
+                except (ValueError, TypeError):
+                    pass
+
+                # Online status
+                device.is_online = raw.get("status", 0) == 1 or raw.get("online", False)
+
                 # Parse params
                 for param in raw.get("params", []):
                     ptype = param.get("param_type")
                     pval = param.get("param_value")
                     if ptype is not None:
                         device.params[ptype] = pval
+
+                _LOGGER.debug(
+                    "Device: %s (%s) type=%d cover=%s online=%s battery=%d",
+                    device.device_name, device.device_sn, device_type_val,
+                    bool(cover), device.is_online, device.battery_level,
+                )
 
                 self.devices[device.device_sn] = device
                 devices.append(device)
@@ -582,6 +613,37 @@ class EufyCloudApi:
         """Check if the push token is still valid."""
         result = await self._post(API_CHECK_PUSH_TOKEN_PATH, {})
         return result.get("code") == ResponseCode.OK
+
+    async def fetch_latest_thumbnails(self) -> None:
+        """Fetch the latest event history and populate device thumbnails.
+
+        Called on startup to ensure camera entities have a preview image
+        even before any push notification arrives.
+        """
+        try:
+            events = await self.get_history(num=50)
+            # Events are typically sorted newest first
+            seen: set[str] = set()
+            for event in events:
+                sn = event.get("device_sn", "")
+                if not sn or sn in seen:
+                    continue
+                pic = (
+                    event.get("pic_url")
+                    or event.get("cover_path")
+                    or event.get("thumb_url")
+                    or event.get("file_path")
+                    or ""
+                )
+                if pic and sn in self.devices:
+                    device = self.devices[sn]
+                    if not device.last_event_pic_url:
+                        device.last_event_pic_url = pic
+                        device.last_event_time = event.get("event_time", 0)
+                        _LOGGER.debug("Thumbnail for %s: %s", sn, pic[:80])
+                    seen.add(sn)
+        except Exception:
+            _LOGGER.debug("Failed to fetch event thumbnails", exc_info=True)
 
     async def refresh_data(self) -> None:
         """Refresh all stations and devices from the cloud."""
