@@ -64,17 +64,19 @@ class EufyCamera(EufySecurityEntity, Camera):
         self._stream_url: str | None = None
         self._rtsp_url: str | None = None
         self._use_rtsp: bool = False
-        self._is_on: bool = False
+        self._is_streaming: bool = False
 
     # ----- HA Camera properties -----
 
     @property
     def is_streaming(self) -> bool:
-        return self._is_on and self._stream_url is not None
+        return self._is_streaming
 
     @property
     def is_on(self) -> bool:
-        return self._is_on
+        # Camera is always "on" — showing still images doesn't require streaming.
+        # This prevents HA from blocking async_camera_image() with "Camera is off".
+        return True
 
     @property
     def motion_detection_enabled(self) -> bool:
@@ -100,7 +102,7 @@ class EufyCamera(EufySecurityEntity, Camera):
             attrs["stream_mode"] = "preemptive"
         elif self._use_rtsp:
             attrs["stream_mode"] = "rtsp"
-        elif self._is_on:
+        elif self._is_streaming:
             attrs["stream_mode"] = "p2p"
         else:
             attrs["stream_mode"] = "idle"
@@ -163,7 +165,7 @@ class EufyCamera(EufySecurityEntity, Camera):
                 if not self._stream_url:
                     await self._setup_ffmpeg_pipe(session)
                 if self._stream_url:
-                    self._is_on = True
+                    self._is_streaming = True
                     return self._stream_url
 
         # 2. If already streaming, return the existing URL
@@ -180,13 +182,13 @@ class EufyCamera(EufySecurityEntity, Camera):
                 self._rtsp_url = url
                 self._use_rtsp = True
                 self._stream_url = url
-                self._is_on = True
+                self._is_streaming = True
                 return url
 
         # Fall back to P2P + ffmpeg
         started = await self._start_p2p_stream()
         if started:
-            self._is_on = True
+            self._is_streaming = True
             return self._stream_url
 
         return None
@@ -195,7 +197,7 @@ class EufyCamera(EufySecurityEntity, Camera):
 
     async def async_turn_on(self) -> None:
         """Start the camera stream."""
-        if self._is_on:
+        if self._is_streaming:
             return
         # stream_source() handles starting everything
         await self.stream_source()
@@ -203,7 +205,7 @@ class EufyCamera(EufySecurityEntity, Camera):
 
     async def async_turn_off(self) -> None:
         """Stop the camera stream."""
-        self._is_on = False
+        self._is_streaming = False
 
         # Stop preemptive stream if running
         sm = self.coordinator.stream_manager
@@ -420,7 +422,7 @@ class EufyCamera(EufySecurityEntity, Camera):
     def _on_p2p_disconnect(self) -> None:
         _LOGGER.debug("P2P disconnected for %s", self._device_sn)
         self._p2p_session = None
-        self._is_on = False
+        self._is_streaming = False
         self.hass.async_create_task(self._cleanup_ffmpeg())
         self.async_write_ha_state()
 

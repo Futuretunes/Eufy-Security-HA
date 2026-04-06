@@ -109,22 +109,15 @@ class P2PSessionPool:
             return None
 
     def _on_session_disconnect(self, station_sn: str) -> None:
-        """Handle unexpected session disconnect — schedule reconnect."""
+        """Handle unexpected session disconnect — clean up, reconnect on next use."""
         self._sessions.pop(station_sn, None)
 
         if self._shutting_down:
             return
 
-        _LOGGER.warning("P2P session lost for %s, scheduling reconnect", station_sn)
-
-        # Cancel any existing reconnect task
-        existing = self._reconnect_tasks.pop(station_sn, None)
-        if existing and not existing.done():
-            existing.cancel()
-
-        self._reconnect_tasks[station_sn] = asyncio.create_task(
-            self._reconnect(station_sn)
-        )
+        # Don't auto-reconnect aggressively — it spams DSK key requests
+        # that may fail. The next get_session() call will reconnect on demand.
+        _LOGGER.info("P2P session ended for %s — will reconnect on next use", station_sn)
 
     async def _reconnect(self, station_sn: str) -> None:
         """Reconnect to a station with exponential backoff."""
