@@ -301,6 +301,85 @@ def decode_p2p_cloud_ips(data: str) -> list[tuple[str, int]]:
 
 
 # ---------------------------------------------------------------------------
+# Lock encryption utilities
+# ---------------------------------------------------------------------------
+_BASIC_LOCK_SEED = [
+    104, -83, -72, 38, -107, 99, -110, 17,
+    -95, -121, 54, 57, -46, -98, -111, 89,
+]
+
+
+def generate_basic_lock_aes_key(admin_user_id: str, station_sn: str) -> bytes:
+    """Generate AES key for basic BLE lock commands.
+
+    Combines a fixed seed array with the station serial and admin user id.
+    Returns 16 bytes suitable as an AES-128 key.
+    """
+    enc_owner = admin_user_id.encode("utf-8")
+    enc_sn = station_sn.encode("utf-8")
+    arr = [b & 0xFF for b in _BASIC_LOCK_SEED]
+    for i in range(16):
+        sn_idx = (enc_sn[i % len(enc_sn)] * 3 + 5) % min(16, len(enc_sn))
+        owner_idx = (enc_owner[i % len(enc_owner)] * 3 + 5) % min(40, len(enc_owner))
+        arr[i] = (arr[i] + enc_sn[sn_idx % len(enc_sn)] + enc_owner[owner_idx % len(enc_owner)]) & 0xFF
+    return bytes(arr)
+
+
+def get_lock_vector_bytes(data: str) -> bytes:
+    """Derive IV for lock AES-CBC encryption from a string (typically station SN).
+
+    Returns 16 bytes: first 16 bytes of the UTF-8 encoding, zero-padded.
+    """
+    enc = data.encode("utf-8")
+    if len(enc) >= 16:
+        return enc[:16]
+    return enc.ljust(16, b"\x00")
+
+
+def encrypt_lock_aes_data(key: bytes, iv: bytes, data: bytes) -> bytes:
+    """Encrypt lock command data using AES-128-CBC with PKCS7 padding."""
+    if len(key) > 16:
+        # Key might be a hex string parsed to bytes; use first 16
+        key = key[:16]
+    cipher = AES.new(key, AES.MODE_CBC, iv[:16])
+    # PKCS7 padding
+    pad_len = 16 - (len(data) % 16)
+    padded = data + bytes([pad_len] * pad_len)
+    return cipher.encrypt(padded)
+
+
+def encode_lock_payload(data: str) -> bytes:
+    """Zero-pad a lock payload string to a 16-byte boundary."""
+    enc = data.encode("utf-8")
+    remainder = len(enc) % 16
+    if remainder == 0:
+        return enc
+    return enc + b"\x00" * (16 - remainder)
+
+
+def generate_smart_lock_aes_key(admin_user_id: str, timestamp: int) -> bytes:
+    """Generate AES key for smart lock (T8506 etc.) commands.
+
+    Key = last 12 chars of user_id (UTF-8) + 4 bytes big-endian timestamp = 16 bytes.
+    """
+    user_part = admin_user_id[-12:].encode("utf-8")
+    time_part = struct.pack(">I", timestamp)
+    key = user_part + time_part
+    # Pad or truncate to exactly 16 bytes
+    if len(key) < 16:
+        key = key.ljust(16, b"\x00")
+    return key[:16]
+
+
+def encrypt_payload_data(data: bytes, key: bytes, iv: bytes) -> bytes:
+    """Encrypt lock payload with AES-128-CBC and PKCS7 padding (standard Node.js style)."""
+    cipher = AES.new(key[:16], AES.MODE_CBC, iv[:16])
+    pad_len = 16 - (len(data) % 16)
+    padded = data + bytes([pad_len] * pad_len)
+    return cipher.encrypt(padded)
+
+
+# ---------------------------------------------------------------------------
 # Image decryption (event thumbnails)
 # ---------------------------------------------------------------------------
 def decode_image(p2p_did: str, data: bytes) -> bytes:

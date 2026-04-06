@@ -1,0 +1,22 @@
+[project]
+name = "eufy-security-advanced"
+version = "0.1.0"
+description = "Pure Python Eufy Security integration for Home Assistant (HACS)"
+requires-python = ">=3.11"
+dependencies = [
+    "pycryptodome>=3.20.0",
+    "cryptography>=41.0.0",
+    "aiohttp>=3.9.0",
+    "protobuf>=4.25.0",
+    "aiomqtt>=2.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

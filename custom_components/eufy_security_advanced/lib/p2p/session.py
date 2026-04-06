@@ -49,6 +49,7 @@ from .protocol import (
     build_lookup_with_key2,
     build_ping,
     build_pong,
+    build_udp_packet,
     parse_cam_id,
     parse_lookup_addr,
     parse_lookup_addr2,
@@ -762,6 +763,8 @@ class P2PSession:
             self._command_results.pop(command_type, None)
             return None
 
+    # ----- Livestream -----
+
     async def start_livestream(self, channel: int = 0) -> bool:
         """Start live video stream."""
         self._is_streaming = True
@@ -775,7 +778,6 @@ class P2PSession:
             self._is_streaming = False
             return False
 
-        # Start keepalive for battery devices
         if self._keepalive_task is None or self._keepalive_task.done():
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
 
@@ -789,6 +791,8 @@ class P2PSession:
 
         if self._keepalive_task and not self._keepalive_task.done():
             self._keepalive_task.cancel()
+
+    # ----- Guard mode -----
 
     async def set_guard_mode(self, mode: int, user_name: str = "") -> None:
         """Set the station's guard mode via P2P."""
@@ -804,15 +808,283 @@ class P2PSession:
         cmd_payload = build_command_payload_json(payload_json)
         await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
 
-    async def trigger_alarm(self, duration: int = 30) -> None:
-        """Trigger the station alarm."""
-        payload = build_command_payload_int(duration)
-        await self.send_command(CommandType.CMD_SET_PAYLOAD, payload)
+    # ----- Alarm trigger -----
+
+    async def trigger_station_alarm(
+        self, duration: int = 30, nick_name: str = ""
+    ) -> None:
+        """Trigger the station alarm siren.
+
+        Uses CMD_SET_PAYLOAD wrapping CMD_SET_TONE_FILE for newer firmware,
+        falling back to CMD_SET_TONE_FILE with WithIntString format.
+        """
+        # Try newer firmware format first (CMD_SET_PAYLOAD wrapping)
+        payload_json = json.dumps({
+            "account_id": self._admin_user_id,
+            "cmd": CommandType.CMD_SET_TONE_FILE,
+            "mValue3": 0,
+            "payload": {
+                "time_out": duration,
+                "user_name": nick_name,
+            },
+        })
+        cmd_payload = build_command_payload_json(payload_json, channel=255)
+        await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
+
+    async def reset_station_alarm(self) -> None:
+        """Stop the station alarm siren."""
+        await self.trigger_station_alarm(duration=0)
+
+    async def trigger_device_alarm(
+        self, duration: int = 30, channel: int = 0
+    ) -> None:
+        """Trigger a device-specific alarm."""
+        from .protocol import build_command_payload_int_string
+        payload = build_command_payload_int_string(
+            value=duration,
+            value_sub=channel,
+            str_value=self._admin_user_id,
+            channel=channel,
+        )
+        await self.send_command(CommandType.CMD_SET_DEVS_TONE_FILE, payload)
+
+    async def reset_device_alarm(self, channel: int = 0) -> None:
+        """Stop a device-specific alarm."""
+        await self.trigger_device_alarm(duration=0, channel=channel)
+
+    # ----- Lock control -----
+
+    async def lock_device(
+        self,
+        device_channel: int,
+        lock: bool = True,
+        nick_name: str = "",
+        short_user_id: str = "",
+    ) -> None:
+        """Lock or unlock a WiFi video lock via P2P (plaintext payload variant).
+
+        For WiFi video locks (simplest variant — no per-lock encryption).
+        BLE locks and advanced WiFi locks require additional encryption
+        which is handled by lock_device_ble() and lock_device_advanced().
+        """
+        payload_json = json.dumps({
+            "account_id": self._admin_user_id,
+            "cmd": CommandType.CMD_P2P_ON_OFF_LOCK,
+            "mChannel": device_channel,
+            "mValue3": 0,
+            "payload": {
+                "shortUserId": short_user_id or self._admin_user_id[:8],
+                "slOperation": 1 if lock else 0,
+                "userId": self._admin_user_id,
+                "userName": nick_name,
+            },
+        })
+        cmd_payload = build_command_payload_json(payload_json, channel=device_channel)
+        await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
+
+    async def lock_device_ble(
+        self,
+        device_channel: int,
+        lock: bool = True,
+        nick_name: str = "",
+        short_user_id: int = 0,
+        lock_sequence: int = 0,
+    ) -> None:
+        """Lock or unlock a BLE lock via P2P with AES-CBC encrypted BLE command."""
+        import time as _time
+
+        from ..crypto import (
+            encrypt_lock_aes_data,
+            encode_lock_payload,
+            generate_basic_lock_aes_key,
+            get_lock_vector_bytes,
+        )
+
+        key = generate_basic_lock_aes_key(self._admin_user_id, self._station_sn)
+        iv = get_lock_vector_bytes(self._station_sn)
+
+        # Build ESL BLE command: [0xA1, 0x02, short_user_id(2B BE), 0xA2, 0x01, lock_val,
+        #                          0xA3, 0x04, timestamp(4B), 0xA4, len(nick), nick_bytes]
+        lock_val = 1 if lock else 0
+        ts = int(_time.time())
+        nick_bytes = nick_name.encode("utf-8")
+
+        ble_cmd = bytearray()
+        ble_cmd += b"\xa1\x02" + struct.pack(">H", short_user_id)
+        ble_cmd += b"\xa2\x01" + bytes([lock_val])
+        ble_cmd += b"\xa3\x04" + struct.pack(">I", ts)
+        ble_cmd += b"\xa4" + bytes([len(nick_bytes)]) + nick_bytes
+
+        import base64 as _b64
+
+        inner_payload = json.dumps({
+            "channel": device_channel,
+            "lock_cmd": 8,  # ESLBleCommand.ON_OFF_LOCK
+            "lock_payload": _b64.b64encode(bytes(ble_cmd)).decode(),
+            "seq_num": lock_sequence,
+        })
+
+        enc_payload = encrypt_lock_aes_data(key, iv, encode_lock_payload(inner_payload))
+
+        outer_json = json.dumps({
+            "account_id": self._admin_user_id,
+            "cmd": CommandType.CMD_DOORLOCK_DATA_PASS_THROUGH,
+            "mValue3": 0,
+            "payload": {
+                "payload": _b64.b64encode(enc_payload).decode(),
+            },
+        })
+        cmd_payload = build_command_payload_json(outer_json, channel=device_channel)
+        await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
+
+    async def lock_device_smart(
+        self,
+        device_channel: int,
+        lock: bool = True,
+        nick_name: str = "",
+        short_user_id: str = "",
+        lock_sequence: int = 0,
+    ) -> None:
+        """Lock or unlock a smart lock (T8506, T8502, etc.) via P2P."""
+        import time as _time
+
+        from ..crypto import (
+            encrypt_payload_data,
+            generate_smart_lock_aes_key,
+            get_lock_vector_bytes,
+        )
+
+        timestamp = int(_time.time()) | (int.from_bytes(
+            __import__("os").urandom(1), "big"
+        ) % 100)
+        key = generate_smart_lock_aes_key(self._admin_user_id, timestamp)
+        iv = get_lock_vector_bytes(self._station_sn)
+
+        # Build WritePayload: timestamp(4B) + user_id(bytes) + lock_val(1B) + username(bytes) + short_user_id(hex bytes)
+        # Note: lock=True -> byte 0, lock=False -> byte 1 (inverted!)
+        lock_val = 0 if lock else 1
+        ts_bytes = struct.pack(">I", int(_time.time()))
+        user_bytes = self._admin_user_id.encode("utf-8")
+        nick_bytes = nick_name.encode("utf-8")
+        short_bytes = (short_user_id or self._admin_user_id[:8]).encode("utf-8")
+
+        data = ts_bytes + user_bytes + bytes([lock_val]) + nick_bytes + short_bytes
+        enc_payload = encrypt_payload_data(data, key, iv)
+
+        import base64 as _b64
+
+        outer_json = json.dumps({
+            "account_id": self._admin_user_id,
+            "cmd": CommandType.CMD_TRANSFER_PAYLOAD,
+            "mChannel": device_channel,
+            "mValue3": 0,
+            "payload": {
+                "apiCommand": 6018,  # SmartLockCommand.ON_OFF_LOCK
+                "lock_payload": _b64.b64encode(enc_payload).decode(),
+                "seq_num": lock_sequence,
+                "time": timestamp,
+            },
+        })
+        cmd_payload = build_command_payload_json(outer_json, channel=device_channel)
+        await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
+
+    # ----- RTSP control -----
+
+    async def enable_rtsp(self, channel: int = 0, enable: bool = True) -> None:
+        """Enable or disable the RTSP stream setting on a camera."""
+        from .protocol import build_command_payload_int_string
+        payload = build_command_payload_int_string(
+            value=1 if enable else 0,
+            value_sub=channel,
+            str_value=self._admin_user_id,
+            channel=channel,
+        )
+        await self.send_command(CommandType.CMD_NAS_SWITCH, payload)
+
+    async def start_rtsp_stream(self, channel: int = 0) -> None:
+        """Start the RTSP stream on a camera. The RTSP URL is returned via event."""
+        from .protocol import build_command_payload_int_string
+        payload = build_command_payload_int_string(
+            value=1,
+            value_sub=channel,
+            str_value=self._admin_user_id,
+            channel=channel,
+        )
+        await self.send_command(CommandType.CMD_NAS_TEST, payload)
+
+    async def stop_rtsp_stream(self, channel: int = 0) -> None:
+        """Stop the RTSP stream on a camera."""
+        from .protocol import build_command_payload_int_string
+        payload = build_command_payload_int_string(
+            value=0,
+            value_sub=channel,
+            str_value=self._admin_user_id,
+            channel=channel,
+        )
+        await self.send_command(CommandType.CMD_NAS_TEST, payload)
+
+    # ----- Talkback (two-way audio) -----
+
+    async def start_talkback(self, channel: int = 0, use_doorbell_cmd: bool = False) -> None:
+        """Start talkback (two-way audio) on a device.
+
+        use_doorbell_cmd: True for indoor/solo/floodlight/wired doorbells
+        (uses CMD_DOORBELL_SET_PAYLOAD), False for battery doorbells and
+        other devices (uses CMD_START_TALKBACK).
+        """
+        self._talkback_active = True
+        self._video_seq = 0
+
+        if use_doorbell_cmd:
+            payload_json = json.dumps({"commandType": 1001})  # CMD_START_SPEAK
+            cmd_payload = build_command_payload_json(payload_json, channel=channel)
+            await self.send_command(CommandType.CMD_DOORBELL_SET_PAYLOAD, cmd_payload)
+        else:
+            payload = build_command_payload_int(0, channel=channel)
+            await self.send_command(CommandType.CMD_START_TALKBACK, payload)
+
+    async def stop_talkback(self, channel: int = 0, use_doorbell_cmd: bool = False) -> None:
+        """Stop talkback."""
+        self._talkback_active = False
+
+        if use_doorbell_cmd:
+            payload_json = json.dumps({"commandType": 1002})  # CMD_END_SPEAK
+            cmd_payload = build_command_payload_json(payload_json, channel=channel)
+            await self.send_command(CommandType.CMD_DOORBELL_SET_PAYLOAD, cmd_payload)
+        else:
+            payload = build_command_payload_int(0, channel=channel)
+            await self.send_command(CommandType.CMD_STOP_TALKBACK, payload)
+
+    def send_talkback_audio(self, audio_data: bytes, channel: int = 0) -> None:
+        """Send a talkback audio frame to the device.
+
+        audio_data should be raw AAC-encoded audio.
+        """
+        if not self._connected or not getattr(self, "_talkback_active", False):
+            return
+
+        from .protocol import build_talkback_audio_frame
+
+        video_seq = getattr(self, "_video_seq", 0)
+        frame = build_talkback_audio_frame(audio_data, video_seq, channel)
+        self._video_seq = (video_seq + 1) & 0xFFFF
+
+        # Wrap in DATA envelope
+        envelope = (
+            struct.pack(">H", len(frame))
+            + frame
+        )
+        pkt = build_udp_packet(P2PMessageType.DATA, envelope)
+        self._send_to(pkt)
+
+    # ----- Pan/tilt -----
 
     async def pan_tilt(self, direction: int) -> None:
         """Pan/tilt a PTZ camera. Direction: 0=up, 1=down, 2=left, 3=right."""
         payload = build_command_payload_int(direction)
         await self.send_command(CommandType.CMD_SET_PAYLOAD, payload)
+
+    # ----- Keepalive -----
 
     async def _keepalive_loop(self) -> None:
         """Send CMD_PING keepalive for battery-powered devices."""

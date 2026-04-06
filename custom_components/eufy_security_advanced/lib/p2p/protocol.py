@@ -309,6 +309,71 @@ def build_command_payload_json(
     return header + json_bytes
 
 
+def build_command_payload_int_string(
+    value: int,
+    value_sub: int,
+    str_value: str = "",
+    str_value_sub: str = "",
+    channel: int = 0,
+    encryption: int = 0,
+) -> bytes:
+    """Build a 'WithIntString' command payload.
+
+    Structure: [data_len(2,LE)] [00 00] [01 00] [channel] [enc] [00 00]
+               [valueSub(4,LE)] [value(4,LE)] [strValue(128)] [strValueSub(128)]
+    """
+    str_bytes = str_value.encode("utf-8").ljust(128, b"\x00")[:128]
+    str_sub_bytes = str_value_sub.encode("utf-8").ljust(128, b"\x00")[:128]
+    data = struct.pack("<I", value_sub) + struct.pack("<I", value) + str_bytes + str_sub_bytes
+    data_len = len(data)
+    header = (
+        struct.pack("<H", data_len)
+        + b"\x00\x00"
+        + b"\x01\x00"
+        + bytes([channel, encryption])
+        + b"\x00\x00"
+    )
+    return header + data
+
+
+def build_talkback_audio_frame(
+    audio_data: bytes,
+    video_seq: int,
+    channel: int = 0,
+) -> bytes:
+    """Build a complete talkback audio frame for sending audio TO the device.
+
+    Returns the full UDP DATA payload (without the F1 D0 envelope).
+    """
+    # Command header: [D1 01] [seq(2B BE)] [XZYH] [CMD_AUDIO_FRAME(2B LE)]
+    cmd_header = (
+        struct.pack(">H", P2PDataType.VIDEO)
+        + struct.pack(">H", video_seq)
+        + MAGIC_WORD
+        + struct.pack("<H", 1301)  # CMD_AUDIO_FRAME
+    )
+
+    # Audio data header (16 bytes)
+    audio_data_header = (
+        struct.pack("<I", len(audio_data))  # audio data length
+        + b"\x00"                            # unknown
+        + b"\x00"                            # audio type (AAC)
+        + b"\x00\x00"                        # audio sequence
+        + b"\x00" * 8                        # timestamp
+    )
+
+    # Talkback frame header
+    frame_header = (
+        struct.pack("<I", len(audio_data) + len(audio_data_header))  # bytes_to_read
+        + b"\x01\x00"                  # magic
+        + bytes([channel, 0x00])       # channel + padding
+        + b"\x00\x00"                  # empty
+        + audio_data_header
+    )
+
+    return cmd_header + frame_header + audio_data
+
+
 def build_command_void(channel: int = 0) -> bytes:
     """Build a 'WithoutData' (void) command payload — just the 10-byte header."""
     return (

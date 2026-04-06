@@ -257,9 +257,13 @@ class CommandType(IntEnum):
     CMD_GATEWAYINFO = 1100
     CMD_CAMERA_INFO = 1103
     CMD_PING = 1139
+    CMD_NAS_SWITCH = 1145
+    CMD_NAS_TEST = 1146
     CMD_SDINFO_EX = 1144
     CMD_GET_ALARM_MODE = 1151
     CMD_GET_DEVICE_PING = 1152
+    CMD_SET_TONE_FILE = 1201
+    CMD_SET_DEVS_TONE_FILE = 1202
     CMD_SET_ARMING = 1224
     CMD_VIDEO_FRAME = 1300
     CMD_AUDIO_FRAME = 1301
@@ -267,6 +271,47 @@ class CommandType(IntEnum):
     CMD_DOWNLOAD_FINISH = 1304
     CMD_SET_PAYLOAD = 1350
     CMD_NOTIFY_PAYLOAD = 1351
+    CMD_DOORBELL_SET_PAYLOAD = 1700
+    CMD_DOORLOCK_DATA_PASS_THROUGH = 1911
+    CMD_SET_PAYLOAD_LOCKV12 = 1930
+    CMD_TRANSFER_PAYLOAD = 1940
+    CMD_P2P_ON_OFF_LOCK = 1961
+
+
+# ---------------------------------------------------------------------------
+# Lock sub-command types
+# ---------------------------------------------------------------------------
+class ESLBleCommand(IntEnum):
+    ON_OFF_LOCK = 8
+
+
+class SmartLockCommand(IntEnum):
+    ON_OFF_LOCK = 6018
+
+
+class IndoorCommandType(IntEnum):
+    CMD_START_SPEAK = 1001
+    CMD_END_SPEAK = 1002
+
+
+# ---------------------------------------------------------------------------
+# RTSP-capable device types
+# ---------------------------------------------------------------------------
+RTSP_CAPABLE_TYPES = {
+    DeviceType.CAMERA2, DeviceType.CAMERA2_PRO,
+    DeviceType.CAMERA2C, DeviceType.CAMERA2C_PRO,
+    DeviceType.CAMERA3, DeviceType.CAMERA3C, DeviceType.CAMERA3_PRO,
+    DeviceType.INDOOR_CAMERA, DeviceType.INDOOR_PT_CAMERA,
+    DeviceType.INDOOR_CAMERA_1080, DeviceType.INDOOR_PT_CAMERA_1080,
+    DeviceType.INDOOR_PT_CAMERA_S350, DeviceType.INDOOR_PT_CAMERA_E30,
+    DeviceType.SOLO_CAMERA, DeviceType.SOLO_CAMERA_PRO,
+    DeviceType.SOLO_CAMERA_SPOTLIGHT_1080,
+    DeviceType.SOLO_CAMERA_SPOTLIGHT_2K,
+    DeviceType.FLOODLIGHT, DeviceType.FLOODLIGHT_CAMERA_8422,
+    DeviceType.FLOODLIGHT_CAMERA_8423, DeviceType.FLOODLIGHT_CAMERA_8424,
+    DeviceType.FLOODLIGHT_CAMERA_8425, DeviceType.FLOODLIGHT_CAMERA_8426,
+    DeviceType.DOORBELL,
+}
 
 
 # ---------------------------------------------------------------------------
