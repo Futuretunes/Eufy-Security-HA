@@ -43,7 +43,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register cleanup
     entry.async_on_unload(coordinator.async_shutdown)
 
+    # Reload on options change (stream timeout, auto-start settings, etc.)
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the integration when options are changed."""
+    _LOGGER.info("Options updated, reloading Eufy Security Advanced")
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

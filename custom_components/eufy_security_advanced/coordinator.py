@@ -34,7 +34,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinator that manages cloud polling, push notifications, and MQTT."""
+    """Coordinator that manages cloud polling, push notifications, MQTT, and preemptive streaming."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(
@@ -49,6 +49,9 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._push_mcs: MCSClient | None = None
         self._push_task: asyncio.Task | None = None
         self._mqtt: EufyMQTTClient | None = None
+
+        # Preemptive stream manager (initialized in async_setup)
+        self.stream_manager = None
 
         # Device/station caches
         self.stations: dict[str, StationData] = {}
@@ -82,23 +85,23 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             persistent_data=persistent,
         )
 
-        # Login if no valid token
         if not persistent.auth_token:
             await self._api.login()
 
-        # Fetch initial data
         await self._api.get_station_list()
         await self._api.get_device_list()
         self.stations = self._api.stations
         self.devices = self._api.devices
 
+        # Initialize preemptive stream manager
+        from .stream_manager import PreemptiveStreamManager
+        self.stream_manager = PreemptiveStreamManager(self)
+
         # Start push notifications
         await self._setup_push()
 
         # Start MQTT for smart locks
-        lock_sns = [
-            d.device_sn for d in self.devices.values() if d.is_lock
-        ]
+        lock_sns = [d.device_sn for d in self.devices.values() if d.is_lock]
         if lock_sns:
             await self._setup_mqtt(lock_sns)
 
@@ -109,10 +112,8 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._push_fcm = FCMRegistration(session=session)
             gcm_token = await self._push_fcm.register()
 
-            # Register token with Eufy
             await self._api.register_push_token(gcm_token)
 
-            # Start MCS persistent connection
             self._push_mcs = MCSClient(
                 android_id=self._push_fcm.android_id,
                 security_token=self._push_fcm.security_token,
@@ -122,7 +123,10 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.info("Push notifications enabled")
 
         except Exception:
-            _LOGGER.warning("Failed to set up push notifications, falling back to polling only", exc_info=True)
+            _LOGGER.warning(
+                "Failed to set up push notifications, falling back to polling only",
+                exc_info=True,
+            )
 
     async def _setup_mqtt(self, lock_sns: list[str]) -> None:
         """Set up MQTT for smart lock events."""
@@ -165,6 +169,10 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except ValueError:
                 pass
 
+        # Preemptive stream: evaluate if we should auto-start a stream
+        if self.stream_manager:
+            self.stream_manager.handle_push_event(msg)
+
         # Notify HA of update
         self.async_set_updated_data({"push": msg})
 
@@ -177,22 +185,15 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         et = msg.event_type
 
-        # Motion / person / pet / vehicle detection
         if et in (
-            DoorbellPushEvent.MOTION_DETECTION,
-            IndoorPushEvent.MOTION,
-            3101,
+            DoorbellPushEvent.MOTION_DETECTION, IndoorPushEvent.MOTION, 3101,
         ):
             device.motion_detected = True
         elif et in (
-            DoorbellPushEvent.FACE_DETECTION,
-            IndoorPushEvent.FACE,
-            DoorbellPushEvent.FAMILY_DETECTION,
-            3102, 3303,
+            DoorbellPushEvent.FACE_DETECTION, IndoorPushEvent.FACE,
+            DoorbellPushEvent.FAMILY_DETECTION, 3102, 3303,
         ):
             device.person_detected = True
-            if msg.person_name:
-                device.person_detected = True
         elif et in (DoorbellPushEvent.PET_DETECTION, IndoorPushEvent.PET, 3106):
             device.pet_detected = True
         elif et in (DoorbellPushEvent.VEHICLE_DETECTION, 3107):
@@ -202,16 +203,13 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         elif et in (IndoorPushEvent.SOUND, 3108):
             device.sound_detected = True
 
-        # Sensor
         if msg.sensor_open is not None:
             device.sensor_open = msg.sensor_open
 
-        # Camera state
         if et == CusPushEvent.CAM_STATE:
             status = msg.raw.get("m", 1)
             device.is_online = status == 1
 
-        # Lock events
         if device.is_lock:
             self._apply_lock_push(device, msg)
 
@@ -222,17 +220,13 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         device.lock_event_user = msg.nick_name or msg.user_id
 
         if et in (
-            LockPushEvent.MANUAL_LOCK,
-            LockPushEvent.KEYPAD_LOCK,
-            LockPushEvent.APP_LOCK,
-            LockPushEvent.AUTO_LOCK,
+            LockPushEvent.MANUAL_LOCK, LockPushEvent.KEYPAD_LOCK,
+            LockPushEvent.APP_LOCK, LockPushEvent.AUTO_LOCK,
         ):
             device.is_locked = True
         elif et in (
-            LockPushEvent.MANUAL_UNLOCK,
-            LockPushEvent.AUTO_UNLOCK,
-            LockPushEvent.PW_UNLOCK,
-            LockPushEvent.FINGERPRINT_UNLOCK,
+            LockPushEvent.MANUAL_UNLOCK, LockPushEvent.AUTO_UNLOCK,
+            LockPushEvent.PW_UNLOCK, LockPushEvent.FINGERPRINT_UNLOCK,
             LockPushEvent.APP_UNLOCK,
         ):
             device.is_locked = False
@@ -270,6 +264,8 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_shutdown(self) -> None:
         """Clean up resources."""
+        if self.stream_manager:
+            await self.stream_manager.stop_all()
         if self._push_task and not self._push_task.done():
             self._push_task.cancel()
         if self._push_mcs:

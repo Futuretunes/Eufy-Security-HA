@@ -91,10 +91,23 @@ class EufyCamera(EufySecurityEntity, Camera):
     async def stream_source(self) -> str | None:
         """Return the stream source URL for HA's stream integration.
 
-        Returns an RTSP URL for RTSP-capable cameras, or a named pipe URL
-        fed by ffmpeg for P2P-only cameras.
+        If a preemptive stream is already active (started by the stream
+        manager on a push event), this returns immediately — no delay.
+        Otherwise returns RTSP or starts P2P on demand.
         """
-        # Prefer RTSP if available and configured
+        # Check if the preemptive stream manager already has a session running
+        sm = self.coordinator.stream_manager
+        if sm and sm.is_streaming(self._device_sn):
+            # Preemptive stream is active — use it
+            if self._stream_source:
+                return self._stream_source
+            # Stream was started by the manager but we haven't set up
+            # our ffmpeg pipe yet — do it now using the existing session
+            session = sm.get_session(self._device_sn)
+            if session:
+                await self._attach_to_preemptive_session(session)
+                return self._stream_source
+
         if self._use_rtsp and self._rtsp_url:
             return self._rtsp_url
 
@@ -108,6 +121,16 @@ class EufyCamera(EufySecurityEntity, Camera):
         device = self._device
         if not device:
             return
+
+        # Check if preemptive stream is already running
+        sm = self.coordinator.stream_manager
+        if sm and sm.is_streaming(self._device_sn):
+            session = sm.get_session(self._device_sn)
+            if session:
+                await self._attach_to_preemptive_session(session)
+                _LOGGER.info("Attached to preemptive stream for %s (no delay)", device.device_sn)
+                self.async_write_ha_state()
+                return
 
         # Try RTSP first for supported cameras
         if self._supports_rtsp:
@@ -181,6 +204,64 @@ class EufyCamera(EufySecurityEntity, Camera):
             await self._p2p_session.disconnect()
             self._p2p_session = None
         self._rtsp_url = None
+
+    # ----- Preemptive stream attach -----
+
+    async def _attach_to_preemptive_session(self, session: P2PSession) -> None:
+        """Attach to a P2P session already started by the stream manager.
+
+        The session is already connected and streaming — we just need to
+        set up the ffmpeg pipe and wire the stream data callback.
+        """
+        self._p2p_session = session
+
+        # Set up ffmpeg pipe if not already done
+        if not self._stream_source:
+            pipe_dir = tempfile.mkdtemp(prefix="eufy_")
+            self._ffmpeg_pipe_path = os.path.join(pipe_dir, "video.pipe")
+            os.mkfifo(self._ffmpeg_pipe_path)
+
+            output_port = await self._find_free_port()
+            output_url = f"tcp://127.0.0.1:{output_port}?listen=1"
+            self._stream_source = f"tcp://127.0.0.1:{output_port}"
+
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-hide_banner", "-loglevel", "warning",
+                "-fflags", "+genpts+discardcorrupt",
+                "-f", "h264",
+                "-i", self._ffmpeg_pipe_path,
+                "-c:v", "copy",
+                "-f", "mpegts",
+                output_url,
+            ]
+
+            self._ffmpeg_process = await asyncio.create_subprocess_exec(
+                *ffmpeg_cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            self._pipe_fd = None
+
+            def on_stream_data(data: StreamData) -> None:
+                if not data.is_video or not data.data:
+                    return
+                if self._pipe_fd is None:
+                    try:
+                        self._pipe_fd = os.open(
+                            self._ffmpeg_pipe_path, os.O_WRONLY | os.O_NONBLOCK
+                        )
+                    except OSError:
+                        return
+                try:
+                    os.write(self._pipe_fd, data.data)
+                except OSError:
+                    pass
+                self._last_image = data.data
+
+            session.set_stream_callback(on_stream_data)
+            session.set_disconnect_callback(self._on_p2p_disconnect)
 
     # ----- P2P + ffmpeg pipeline -----
 

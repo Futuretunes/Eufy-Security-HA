@@ -35,5 +35,21 @@
     "abort": {
       "already_configured": "This account is already configured"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Stream & Battery Settings",
+        "description": "Configure automatic stream behavior. Streams start preemptively on events so there is no delay when you open the camera. They auto-stop after the timeout to protect battery life.",
+        "data": {
+          "auto_start_stream": "Enable preemptive streaming on events",
+          "auto_start_on_doorbell": "Start stream on doorbell press",
+          "auto_start_on_person": "Start stream on person detection",
+          "auto_start_on_motion": "Start stream on motion detection",
+          "stream_timeout": "Auto-stop stream after (seconds)",
+          "stream_keepalive": "Extend stream if new event within (seconds)"
+        }
+      }
+    }
   }
 }

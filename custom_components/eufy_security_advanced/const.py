@@ -8,9 +8,23 @@ MANUFACTURER = "Eufy"
 # Configuration keys
 CONF_COUNTRY = "country"
 
+# Stream auto-start/stop options
+CONF_AUTO_START_STREAM = "auto_start_stream"
+CONF_AUTO_START_ON_PERSON = "auto_start_on_person"
+CONF_AUTO_START_ON_MOTION = "auto_start_on_motion"
+CONF_AUTO_START_ON_DOORBELL = "auto_start_on_doorbell"
+CONF_STREAM_TIMEOUT = "stream_timeout"
+CONF_STREAM_KEEPALIVE = "stream_keepalive"
+
 # Default values
 DEFAULT_PORT = 32100
 DEFAULT_TIMEOUT = 30
+DEFAULT_STREAM_TIMEOUT = 30  # seconds — auto-stop stream after this
+DEFAULT_STREAM_KEEPALIVE = 120  # seconds — extend stream if new events arrive
+DEFAULT_AUTO_START_STREAM = True
+DEFAULT_AUTO_START_ON_PERSON = True
+DEFAULT_AUTO_START_ON_MOTION = False  # motion can be noisy, off by default
+DEFAULT_AUTO_START_ON_DOORBELL = True
 
 # Cloud API
 API_BASE_URL = "https://extend.eufylife.com"
