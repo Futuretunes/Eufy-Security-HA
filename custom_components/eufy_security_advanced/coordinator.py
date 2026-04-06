@@ -108,13 +108,20 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Only login if we don't have a valid token
         if not persistent.auth_token:
-            await self._login_with_retry()
+            try:
+                await asyncio.wait_for(self._login_with_retry(), timeout=30)
+            except asyncio.TimeoutError:
+                raise EufyCloudApiError("Login timed out after 30s")
         else:
             _LOGGER.debug("Using saved auth token, skipping login")
 
-        # Fetch initial data
-        await self._api.get_station_list()
-        await self._api.get_device_list()
+        # Fetch initial data (with timeout)
+        try:
+            await asyncio.wait_for(self._api.get_station_list(), timeout=30)
+            await asyncio.wait_for(self._api.get_device_list(), timeout=30)
+        except asyncio.TimeoutError:
+            raise EufyCloudApiError("Device list fetch timed out")
+
         self.stations = self._api.stations
         self.devices = self._api.devices
 
@@ -129,8 +136,11 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 dev.is_camera, dev.is_doorbell,
             )
 
-        # Fetch latest event thumbnails so camera entities have a preview image
-        await self._api.fetch_latest_thumbnails()
+        # Fetch thumbnails (non-critical — don't block setup)
+        try:
+            await asyncio.wait_for(self._api.fetch_latest_thumbnails(), timeout=15)
+        except (asyncio.TimeoutError, Exception):
+            _LOGGER.debug("Thumbnail fetch skipped (timeout or error)")
 
         # Initialize P2P session pool
         from .p2p_manager import P2PSessionPool
@@ -140,13 +150,30 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         from .stream_manager import PreemptiveStreamManager
         self.stream_manager = PreemptiveStreamManager(self)
 
-        # Start push notifications
-        await self._setup_push()
+        # Push and MQTT are started in background — don't block setup
+        self.hass.async_create_task(self._setup_push_background())
+        self.hass.async_create_task(self._setup_mqtt_background())
 
-        # Start MQTT for smart locks
+    async def _setup_push_background(self) -> None:
+        """Set up push notifications in background — never blocks integration setup."""
+        try:
+            await asyncio.wait_for(self._setup_push(), timeout=60)
+        except asyncio.TimeoutError:
+            _LOGGER.warning("Push notification setup timed out — will retry on next poll")
+        except Exception:
+            _LOGGER.warning("Push setup failed — polling only", exc_info=True)
+
+    async def _setup_mqtt_background(self) -> None:
+        """Set up MQTT in background — never blocks integration setup."""
         lock_sns = [d.device_sn for d in self.devices.values() if d.is_lock]
-        if lock_sns:
-            await self._setup_mqtt(lock_sns)
+        if not lock_sns:
+            return
+        try:
+            await asyncio.wait_for(self._setup_mqtt(lock_sns), timeout=30)
+        except asyncio.TimeoutError:
+            _LOGGER.warning("MQTT setup timed out")
+        except Exception:
+            _LOGGER.warning("MQTT setup failed", exc_info=True)
 
     async def _login_with_retry(self) -> None:
         """Login with retry on session conflict (another session kicked us)."""
