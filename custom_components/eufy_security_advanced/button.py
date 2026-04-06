@@ -13,7 +13,6 @@ from .const import DOMAIN
 from .coordinator import EufySecurityCoordinator
 from .entity import EufySecurityEntity, EufyStationEntity
 from .lib.models import DeviceData, StationData
-from .lib.p2p.session import P2PSession
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,13 +25,11 @@ async def async_setup_entry(
     coordinator: EufySecurityCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[ButtonEntity] = []
 
-    # Station buttons
     for station in coordinator.stations.values():
         entities.append(EufyAlarmButton(coordinator, station))
         entities.append(EufyAlarmStopButton(coordinator, station))
         entities.append(EufyRebootButton(coordinator, station))
 
-    # Device buttons
     for device in coordinator.devices.values():
         if device.is_camera or device.is_doorbell:
             entities.append(EufyStartStreamButton(coordinator, device))
@@ -41,28 +38,6 @@ async def async_setup_entry(
             entities.append(EufyDeviceAlarmStopButton(coordinator, device))
 
     async_add_entities(entities)
-
-
-# ---------------------------------------------------------------------------
-# Helper to get a station P2P session
-# ---------------------------------------------------------------------------
-async def _get_station_session(coordinator: EufySecurityCoordinator, station: StationData) -> P2PSession | None:
-    dsk_keys = await coordinator.api.get_dsk_keys()
-    dsk_data = dsk_keys.get(station.station_sn, {})
-    dsk_key = dsk_data.get("dsk_key", "")
-
-    session = P2PSession(
-        station_sn=station.station_sn,
-        p2p_did=station.p2p_did,
-        dsk_key=dsk_key,
-        cloud_ips=station.p2p_cloud_ips or [],
-        admin_user_id=coordinator.api.persistent_data.user_id,
-        get_cipher_callback=coordinator.api.get_ciphers,
-    )
-    if await session.connect():
-        return session
-    _LOGGER.error("Failed to connect P2P for station %s", station.station_sn)
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -76,10 +51,10 @@ class EufyAlarmButton(EufyStationEntity, ButtonEntity):
         super().__init__(coordinator, station, "trigger_alarm")
 
     async def async_press(self) -> None:
-        station = self._station
-        if not station:
+        pool = self.coordinator.p2p_pool
+        if not pool:
             return
-        session = await _get_station_session(self.coordinator, station)
+        session = await pool.get_session(self._station_sn)
         if not session:
             return
         try:
@@ -87,8 +62,6 @@ class EufyAlarmButton(EufyStationEntity, ButtonEntity):
             await session.trigger_station_alarm(duration=30, nick_name=nick)
         except Exception:
             _LOGGER.exception("Failed to trigger alarm on %s", self._station_sn)
-        finally:
-            await session.disconnect()
 
 
 class EufyAlarmStopButton(EufyStationEntity, ButtonEntity):
@@ -99,18 +72,16 @@ class EufyAlarmStopButton(EufyStationEntity, ButtonEntity):
         super().__init__(coordinator, station, "stop_alarm")
 
     async def async_press(self) -> None:
-        station = self._station
-        if not station:
+        pool = self.coordinator.p2p_pool
+        if not pool:
             return
-        session = await _get_station_session(self.coordinator, station)
+        session = await pool.get_session(self._station_sn)
         if not session:
             return
         try:
             await session.reset_station_alarm()
         except Exception:
             _LOGGER.exception("Failed to stop alarm on %s", self._station_sn)
-        finally:
-            await session.disconnect()
 
 
 class EufyRebootButton(EufyStationEntity, ButtonEntity):
@@ -140,10 +111,10 @@ class EufyStartStreamButton(EufySecurityEntity, ButtonEntity):
         device = self._device
         if not device:
             return
-        station = self.coordinator.stations.get(device.station_sn)
-        if not station:
+        pool = self.coordinator.p2p_pool
+        if not pool:
             return
-        session = await _get_station_session(self.coordinator, station)
+        session = await pool.get_session(device.station_sn)
         if not session:
             return
         try:
@@ -178,18 +149,16 @@ class EufyDeviceAlarmButton(EufySecurityEntity, ButtonEntity):
         device = self._device
         if not device:
             return
-        station = self.coordinator.stations.get(device.station_sn)
-        if not station:
+        pool = self.coordinator.p2p_pool
+        if not pool:
             return
-        session = await _get_station_session(self.coordinator, station)
+        session = await pool.get_session(device.station_sn)
         if not session:
             return
         try:
             await session.trigger_device_alarm(duration=30, channel=device.device_channel)
         except Exception:
             _LOGGER.exception("Failed to trigger device alarm for %s", device.device_sn)
-        finally:
-            await session.disconnect()
 
 
 class EufyDeviceAlarmStopButton(EufySecurityEntity, ButtonEntity):
@@ -203,15 +172,13 @@ class EufyDeviceAlarmStopButton(EufySecurityEntity, ButtonEntity):
         device = self._device
         if not device:
             return
-        station = self.coordinator.stations.get(device.station_sn)
-        if not station:
+        pool = self.coordinator.p2p_pool
+        if not pool:
             return
-        session = await _get_station_session(self.coordinator, station)
+        session = await pool.get_session(device.station_sn)
         if not session:
             return
         try:
             await session.reset_device_alarm(channel=device.device_channel)
         except Exception:
             _LOGGER.exception("Failed to stop device alarm for %s", device.device_sn)
-        finally:
-            await session.disconnect()

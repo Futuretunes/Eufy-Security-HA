@@ -40,10 +40,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Register services (PTZ, alarm, talkback, notifications)
+    from .services import async_setup_services
+    await async_setup_services(hass)
+
     # Register cleanup
     entry.async_on_unload(coordinator.async_shutdown)
 
-    # Reload on options change (stream timeout, auto-start settings, etc.)
+    # Reload on options change
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     return True
@@ -60,6 +64,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator: EufySecurityCoordinator = hass.data[DOMAIN].get(entry.entry_id)
     if coordinator:
         await coordinator.async_shutdown()
+
+    # Unload services if this is the last entry
+    remaining = [
+        eid for eid in hass.data.get(DOMAIN, {}) if eid != entry.entry_id
+    ]
+    if not remaining:
+        from .services import async_unload_services
+        await async_unload_services(hass)
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 

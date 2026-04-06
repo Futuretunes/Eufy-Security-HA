@@ -43,10 +43,17 @@ async def async_setup_entry(
             entities.append(EufyLastEventSensor(coordinator, device))
             entities.append(EufyStreamStatusSensor(coordinator, device))
 
+        # Firmware sensor for all devices
+        entities.append(EufyFirmwareSensor(coordinator, device))
+
     # Station sensors
     for station in coordinator.stations.values():
         entities.append(EufyGuardModeSensor(coordinator, station))
         entities.append(EufyCurrentModeSensor(coordinator, station))
+        entities.append(EufyStationFirmwareSensor(coordinator, station))
+
+    # Integration-level push status sensor
+    entities.append(EufyPushStatusSensor(coordinator))
 
     async_add_entities(entities)
 
@@ -238,3 +245,67 @@ class EufyCurrentModeSensor(EufyStationEntity, SensorEntity):
         if s:
             return _GUARD_MODE_NAMES.get(s.current_mode, str(s.current_mode.value))
         return "Unknown"
+
+
+class EufyStationFirmwareSensor(EufyStationEntity, SensorEntity):
+    _attr_name = "Firmware"
+    _attr_entity_category = "diagnostic"
+    _attr_icon = "mdi:update"
+
+    def __init__(self, coordinator, station):
+        super().__init__(coordinator, station, "firmware")
+
+    @property
+    def native_value(self) -> str | None:
+        s = self._station
+        return s.main_sw_version if s else None
+
+
+# ---------------------------------------------------------------------------
+# Device firmware sensor
+# ---------------------------------------------------------------------------
+class EufyFirmwareSensor(EufySecurityEntity, SensorEntity):
+    _attr_name = "Firmware"
+    _attr_entity_category = "diagnostic"
+    _attr_icon = "mdi:update"
+
+    def __init__(self, coordinator, device):
+        super().__init__(coordinator, device, "firmware")
+
+    @property
+    def native_value(self) -> str | None:
+        d = self._device
+        return d.main_sw_version if d else None
+
+
+# ---------------------------------------------------------------------------
+# Integration-level push status sensor
+# ---------------------------------------------------------------------------
+class EufyPushStatusSensor(SensorEntity):
+    """Shows whether FCM push notifications are connected."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Push Notification Status"
+    _attr_entity_category = "diagnostic"
+    _attr_icon = "mdi:bell-ring"
+
+    def __init__(self, coordinator) -> None:
+        self.coordinator = coordinator
+        self._attr_unique_id = f"{DOMAIN}_push_status"
+
+    @property
+    def device_info(self):
+        return None  # Integration-level, not tied to a device
+
+    @property
+    def native_value(self) -> str:
+        return "Connected" if self.coordinator.push_connected else "Disconnected"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {
+            "p2p_connected_stations": (
+                self.coordinator.p2p_pool.connected_stations
+                if self.coordinator.p2p_pool else []
+            ),
+        }

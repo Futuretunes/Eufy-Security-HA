@@ -1,0 +1,104 @@
+ptz_move:
+  name: PTZ Move
+  description: Pan/tilt a camera in the specified direction
+  fields:
+    device_sn:
+      name: Device Serial
+      description: Serial number of the camera
+      required: true
+      selector:
+        text:
+    direction:
+      name: Direction
+      description: Direction to move
+      required: true
+      selector:
+        select:
+          options:
+            - "up"
+            - "down"
+            - "left"
+            - "right"
+
+ptz_360:
+  name: PTZ 360
+  description: Start a 360-degree pan rotation
+  fields:
+    device_sn:
+      name: Device Serial
+      description: Serial number of the camera
+      required: true
+      selector:
+        text:
+
+trigger_alarm:
+  name: Trigger Alarm
+  description: Trigger the alarm on a station for a specified duration
+  fields:
+    station_sn:
+      name: Station Serial
+      description: Serial number of the station
+      required: true
+      selector:
+        text:
+    duration:
+      name: Duration
+      description: Duration in seconds
+      required: false
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 300
+          unit_of_measurement: seconds
+
+stop_alarm:
+  name: Stop Alarm
+  description: Stop the alarm on a station
+  fields:
+    station_sn:
+      name: Station Serial
+      description: Serial number of the station
+      required: true
+      selector:
+        text:
+
+start_talkback:
+  name: Start Talkback
+  description: Start two-way audio on a camera
+  fields:
+    device_sn:
+      name: Device Serial
+      description: Serial number of the camera
+      required: true
+      selector:
+        text:
+
+stop_talkback:
+  name: Stop Talkback
+  description: Stop two-way audio on a camera
+  fields:
+    device_sn:
+      name: Device Serial
+      description: Serial number of the camera
+      required: true
+      selector:
+        text:
+
+send_notification_image:
+  name: Send Notification Image
+  description: Send the latest event image as a persistent HA notification
+  fields:
+    device_sn:
+      name: Device Serial
+      description: Serial number of the camera
+      required: true
+      selector:
+        text:
+    title:
+      name: Title
+      description: Notification title
+      required: false
+      default: "Eufy Security"
+      selector:
+        text:

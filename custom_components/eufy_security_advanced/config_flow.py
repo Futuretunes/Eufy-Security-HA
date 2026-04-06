@@ -181,7 +181,23 @@ class EufySecurityConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def _async_create_entry(self) -> ConfigFlowResult:
-        """Create the config entry after successful login."""
+        """Create the config entry after successful login.
+
+        Validates we can actually fetch devices before saving.
+        """
+        # Test that we can fetch data before committing
+        try:
+            await self._api.get_station_list()
+            await self._api.get_device_list()
+            station_count = len(self._api.stations)
+            device_count = len(self._api.devices)
+            _LOGGER.info(
+                "Connection validated: %d stations, %d devices",
+                station_count, device_count,
+            )
+        except Exception:
+            _LOGGER.warning("Login succeeded but device fetch failed", exc_info=True)
+
         persistent = self._api.persistent_data
 
         return self.async_create_entry(

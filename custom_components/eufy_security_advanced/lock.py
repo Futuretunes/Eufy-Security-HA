@@ -77,45 +77,19 @@ class EufyLock(EufySecurityEntity, LockEntity):
             attrs["last_event_user"] = device.lock_event_user
         return attrs
 
-    async def _get_p2p_session(self):
-        """Get or create a P2P session to the lock's station."""
-        device = self._device
-        if not device:
-            return None
-
-        station = self.coordinator.stations.get(device.station_sn)
-        if not station:
-            _LOGGER.error("Station %s not found for lock %s", device.station_sn, device.device_sn)
-            return None
-
-        from .lib.p2p.session import P2PSession
-
-        dsk_keys = await self.coordinator.api.get_dsk_keys()
-        dsk_data = dsk_keys.get(station.station_sn, {})
-        dsk_key = dsk_data.get("dsk_key", "")
-
-        session = P2PSession(
-            station_sn=station.station_sn,
-            p2p_did=station.p2p_did,
-            dsk_key=dsk_key,
-            cloud_ips=station.p2p_cloud_ips or [],
-            admin_user_id=self.coordinator.api.persistent_data.user_id,
-            get_cipher_callback=self.coordinator.api.get_ciphers,
-        )
-
-        connected = await session.connect()
-        if not connected:
-            _LOGGER.error("Failed to connect P2P for lock %s", device.device_sn)
-            return None
-        return session
-
     async def _send_lock_command(self, lock: bool) -> None:
         """Send lock/unlock command via P2P based on lock type."""
         device = self._device
         if not device:
             return
 
-        session = await self._get_p2p_session()
+        # Use the session pool — reuses existing connection
+        pool = self.coordinator.p2p_pool
+        if not pool:
+            _LOGGER.error("P2P session pool not available")
+            return
+
+        session = await pool.get_session(device.station_sn)
         if not session:
             return
 
@@ -150,8 +124,6 @@ class EufyLock(EufySecurityEntity, LockEntity):
             _LOGGER.info("Lock %s: %s", device.device_sn, "locked" if lock else "unlocked")
         except Exception:
             _LOGGER.exception("Failed to %s lock %s", "lock" if lock else "unlock", device.device_sn)
-        finally:
-            await session.disconnect()
 
     async def async_lock(self, **kwargs) -> None:
         await self._send_lock_command(lock=True)
