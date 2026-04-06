@@ -2,6 +2,5 @@
   "name": "Eufy Security Advanced",
   "homeassistant": "2024.1.0",
   "render_readme": true,
-  "zip_release": true,
-  "filename": "eufy_security_advanced.zip"
+  "content_in_root": false
 }
