@@ -1,0 +1,17 @@
+{
+  "domain": "eufy_security_advanced",
+  "name": "Eufy Security Advanced",
+  "codeowners": ["@mikula"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/mikula/eufy-security-advanced",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/mikula/eufy-security-advanced/issues",
+  "requirements": [
+    "pycryptodome>=3.20.0",
+    "aiohttp>=3.9.0",
+    "protobuf>=4.25.0",
+    "aiomqtt>=2.0.0"
+  ],
+  "version": "0.1.0"
+}

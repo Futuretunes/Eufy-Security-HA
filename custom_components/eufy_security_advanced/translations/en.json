@@ -1,0 +1,39 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Eufy Security Account",
+        "description": "Enter your Eufy Security account credentials. A secondary account with admin rights is recommended.",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "country": "Country Code (e.g., US, DE, GB)"
+        }
+      },
+      "verify_code": {
+        "title": "Two-Factor Authentication",
+        "description": "A verification code has been sent to your email. Enter it below.",
+        "data": {
+          "verify_code": "Verification Code"
+        }
+      },
+      "captcha": {
+        "title": "CAPTCHA Verification",
+        "description": "Please solve the CAPTCHA below.",
+        "data": {
+          "captcha_answer": "CAPTCHA Answer"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password",
+      "cannot_connect": "Could not connect to Eufy servers",
+      "unknown": "An unexpected error occurred",
+      "captcha_failed": "CAPTCHA answer was incorrect, please try again",
+      "verify_code_failed": "Invalid verification code"
+    },
+    "abort": {
+      "already_configured": "This account is already configured"
+    }
+  }
+}
