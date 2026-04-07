@@ -263,6 +263,9 @@ class EufyCamera(EufySecurityEntity, Camera):
             self._ffmpeg_process.pid if self._ffmpeg_process.pid else 0,
         )
 
+        _bytes_written = [0]
+        _frames_written = [0]
+
         def on_data(data: StreamData) -> None:
             """Write P2P video data to the ffmpeg pipe (non-blocking)."""
             if not data.is_video or not data.data:
@@ -271,10 +274,17 @@ class EufyCamera(EufySecurityEntity, Camera):
                 return
             try:
                 os.write(self._pipe_w, data.data)
+                _frames_written[0] += 1
+                _bytes_written[0] += len(data.data)
+                if _frames_written[0] in (1, 10, 50):
+                    _LOGGER.info(
+                        "PIPE: wrote %d frames (%d KB) to ffmpeg",
+                        _frames_written[0], _bytes_written[0] // 1024,
+                    )
             except BlockingIOError:
-                pass  # pipe buffer full, drop frame
-            except OSError:
-                pass  # pipe broken
+                _LOGGER.warning("PIPE: buffer full, dropped frame (%d bytes)", len(data.data))
+            except OSError as e:
+                _LOGGER.warning("PIPE: broken (%s), wrote %d frames total", e, _frames_written[0])
 
         session.set_stream_callback(on_data)
         session.set_disconnect_callback(self._on_disconnect)
