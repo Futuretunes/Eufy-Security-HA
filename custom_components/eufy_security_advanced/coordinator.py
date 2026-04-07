@@ -131,10 +131,17 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         for sn, dev in self.devices.items():
             _LOGGER.info(
-                "  Device: %s (%s) type=%s camera=%s doorbell=%s",
+                "  Device: %s (%s) type=%s camera=%s doorbell=%s pic=%s",
                 dev.device_name, sn, dev.device_type.name,
                 dev.is_camera, dev.is_doorbell,
+                dev.last_event_pic_url[:60] if dev.last_event_pic_url else "NONE",
             )
+            # Log raw keys that might contain image URLs (helps debug)
+            img_keys = {k: str(v)[:80] for k, v in dev.raw.items()
+                        if any(x in k.lower() for x in
+                               ("pic", "cover", "thumb", "image", "url", "path"))}
+            if img_keys:
+                _LOGGER.info("    Image-related fields: %s", img_keys)
 
         # Fetch thumbnails (non-critical — don't block setup)
         try:

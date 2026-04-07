@@ -116,35 +116,69 @@ class EufyCamera(EufySecurityEntity, Camera):
         """Return the latest still image.
 
         Fetches the most recent event thumbnail from the Eufy cloud.
-        This is what shows as the preview in a picture-entity or
-        picture-glance card on the Lovelace dashboard.
+        Tries multiple approaches: direct URL, URL with auth, relative path.
         """
         d = self._device
-        if d and d.last_event_pic_url:
-            url = d.last_event_pic_url
-            _LOGGER.debug("Fetching camera image for %s from %s", self._device_sn, url[:80])
-            try:
-                from homeassistant.helpers.aiohttp_client import async_get_clientsession
-                session = async_get_clientsession(self.hass)
-                async with session.get(url, timeout=10) as resp:
-                    if resp.status == 200:
-                        self._last_image = await resp.read()
-                        _LOGGER.debug(
-                            "Got image for %s: %d bytes",
-                            self._device_sn, len(self._last_image),
-                        )
+        if not d:
+            return self._last_image
+
+        url = d.last_event_pic_url
+        if not url:
+            _LOGGER.info("No event pic URL for %s — raw keys: %s",
+                         self._device_sn,
+                         [k for k in d.raw.keys() if "pic" in k.lower()
+                          or "cover" in k.lower() or "thumb" in k.lower()
+                          or "image" in k.lower() or "url" in k.lower()])
+            return self._last_image
+
+        # If it's a relative path, prepend the API base
+        if url.startswith("/"):
+            api_base = self.coordinator.api.persistent_data.api_base
+            url = f"{api_base}{url}"
+
+        _LOGGER.info("Fetching camera image for %s from: %s", self._device_sn, url)
+
+        try:
+            from homeassistant.helpers.aiohttp_client import async_get_clientsession
+            session = async_get_clientsession(self.hass)
+
+            # Build headers — some Eufy image URLs need auth
+            headers = {}
+            api = self.coordinator.api
+            if api._auth_token:
+                headers["X-Auth-Token"] = api._auth_token
+            if api._user_id:
+                from .lib.crypto import md5_hex
+                headers["gtoken"] = md5_hex(api._user_id)
+
+            # Try with auth headers first
+            async with session.get(url, headers=headers, timeout=15) as resp:
+                _LOGGER.info(
+                    "Image response for %s: HTTP %d, content-type=%s, length=%s",
+                    self._device_sn, resp.status,
+                    resp.headers.get("content-type", "?"),
+                    resp.headers.get("content-length", "?"),
+                )
+                if resp.status == 200:
+                    data = await resp.read()
+                    if len(data) > 100:  # Sanity check — not an error page
+                        self._last_image = data
+                        _LOGGER.info("Got image for %s: %d bytes", self._device_sn, len(data))
                     else:
-                        _LOGGER.warning(
-                            "Image fetch for %s returned HTTP %d",
-                            self._device_sn, resp.status,
-                        )
-            except Exception:
-                _LOGGER.debug("Failed to fetch event image for %s", self._device_sn, exc_info=True)
-        else:
-            if d:
-                _LOGGER.debug("No event pic URL for %s", self._device_sn)
-            else:
-                _LOGGER.debug("Device %s not found in coordinator", self._device_sn)
+                        _LOGGER.warning("Image for %s too small (%d bytes), might be error", self._device_sn, len(data))
+                elif resp.status == 403 or resp.status == 401:
+                    _LOGGER.warning("Image auth failed for %s (HTTP %d) — URL may need different auth", self._device_sn, resp.status)
+                    # Try without auth as fallback
+                    async with session.get(url, timeout=15) as resp2:
+                        if resp2.status == 200:
+                            data = await resp2.read()
+                            if len(data) > 100:
+                                self._last_image = data
+                else:
+                    _LOGGER.warning("Image fetch for %s: HTTP %d", self._device_sn, resp.status)
+
+        except Exception:
+            _LOGGER.warning("Failed to fetch image for %s", self._device_sn, exc_info=True)
 
         return self._last_image
 
