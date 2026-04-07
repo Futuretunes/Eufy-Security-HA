@@ -106,14 +106,13 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             persistent_data=persistent,
         )
 
-        # Only login if we don't have a valid token
-        if not persistent.auth_token:
-            try:
-                await asyncio.wait_for(self._login_with_retry(), timeout=30)
-            except asyncio.TimeoutError:
-                raise EufyCloudApiError("Login timed out after 30s")
-        else:
-            _LOGGER.debug("Using saved auth token, skipping login")
+        # Always login fresh — the ECDH shared secret must be established
+        # in the same session for response decryption to work. Saved tokens
+        # alone don't work because the server's ECDH state is per-session.
+        try:
+            await asyncio.wait_for(self._login_with_retry(), timeout=30)
+        except asyncio.TimeoutError:
+            raise EufyCloudApiError("Login timed out after 30s")
 
         # Fetch initial data (with timeout)
         try:

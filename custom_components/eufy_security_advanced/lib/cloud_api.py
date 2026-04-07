@@ -204,7 +204,11 @@ class EufyCloudApi:
         url = f"{self._api_base}/{path}"
         body = data or {}
         body.setdefault("transaction", str(int(time.time() * 1000)))
-        return await self._rate_limited_request("POST", url, json=body)
+        result = await self._rate_limited_request("POST", url, json=body)
+        code = result.get("code", -1)
+        if code != 0:
+            _LOGGER.debug("API %s returned code=%s msg=%s", path, code, result.get("msg", ""))
+        return result
 
     async def _get(self, path: str) -> dict[str, Any]:
         """GET from the API."""
@@ -217,13 +221,18 @@ class EufyCloudApi:
             try:
                 raw = decrypt_api_data(data, self._shared_key)
                 text = get_null_terminated_string(raw)
-                return json.loads(text)
-            except Exception:
-                _LOGGER.debug("Failed to decrypt response, trying as plain JSON")
+                parsed = json.loads(text)
+                _LOGGER.debug("Decrypted response: %d items" if isinstance(parsed, list) else "Decrypted response: dict", len(parsed) if isinstance(parsed, list) else 0)
+                return parsed
+            except Exception as err:
+                _LOGGER.warning("Decrypt failed (%s), trying plain JSON. Data starts with: %s", err, repr(data[:80]) if len(data) > 80 else repr(data))
                 try:
                     return json.loads(data)
                 except json.JSONDecodeError:
+                    _LOGGER.warning("Not JSON either, returning raw data (%d chars)", len(data))
                     return data
+        if isinstance(data, list):
+            _LOGGER.debug("Response is already a list with %d items", len(data))
         return data
 
     # ----- Public API methods -----
@@ -261,9 +270,13 @@ class EufyCloudApi:
         if not self._api_base:
             await self.discover_api_base()
 
-        # For login, always use the DEFAULT server public key to encrypt
-        # the password. The stored server key from a previous session is
-        # only valid for decrypting responses, not for a fresh login.
+        # Generate a FRESH ECDH key pair for each login.
+        # The server's ECDH state is per-session — reusing old keys
+        # means the shared secret won't match and response decryption fails.
+        self._ecdh = ECDHKeyExchange()
+        self._data.client_private_key = self._ecdh.private_key_hex
+
+        # Use the DEFAULT server public key to encrypt the password.
         login_key = self._ecdh.compute_shared_secret(SERVER_PUBLIC_KEY_DEFAULT)
         encrypted_password = encrypt_api_data(self._password, login_key)
 
@@ -314,12 +327,17 @@ class EufyCloudApi:
 
         login_data = result.get("data", {})
 
-        # Update server public key if provided
+        # Update server public key — CRITICAL for decrypting all subsequent responses
         server_secret = login_data.get("server_secret_info", {})
         if server_secret.get("public_key"):
             new_server_pub = server_secret["public_key"]
             self._data.server_public_key = new_server_pub
             self._shared_key = self._ecdh.compute_shared_secret(new_server_pub)
+            _LOGGER.info("ECDH key exchange complete — server key updated")
+        else:
+            _LOGGER.warning("Server did not return a new public key — response decryption may fail")
+            # Fall back: use the default key for decryption too
+            self._shared_key = self._ecdh.compute_shared_secret(SERVER_PUBLIC_KEY_DEFAULT)
 
         # Store auth data
         self._auth_token = login_data.get("auth_token", "")
@@ -329,7 +347,11 @@ class EufyCloudApi:
         self._data.email = login_data.get("email", self._email)
         self._data.nick_name = login_data.get("nick_name", "")
 
-        _LOGGER.info("Login successful for user %s", self._data.nick_name or self._email)
+        _LOGGER.info(
+            "Login successful: user=%s token_expires=%s",
+            self._data.nick_name or self._email,
+            self._token_expires,
+        )
         return login_data
 
     async def send_verify_code(self, message_type: int = 2) -> None:
