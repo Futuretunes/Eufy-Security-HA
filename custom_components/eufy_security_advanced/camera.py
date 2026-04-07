@@ -1,17 +1,22 @@
 """Camera platform for Eufy Security devices.
 
 Still image: fetched from Eufy cloud event thumbnail URL.
-Live stream: started via async_turn_on(), served via stream_source().
-stream_source() NEVER blocks — it returns None if no stream is active.
+Live stream: P2P → ffmpeg (H264→mpegts) → TCP loopback → HA stream component.
+
+Stream lifecycle:
+  1. Preemptive start via push event (doorbell press / person detected), OR
+  2. On-demand start via async_turn_on() (user clicks Turn On).
+  When a stream is active, supported_features includes STREAM so the HA
+  camera card shows a live view. stream_source() returns the TCP URL lazily.
 """
 
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
 import os
 import signal
-import tempfile
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
@@ -48,11 +53,6 @@ class EufyCamera(EufySecurityEntity, Camera):
     """Camera entity — still image preview, live stream on demand."""
 
     _attr_name = "Camera"
-    # STREAM feature disabled until P2P streaming is fully working.
-    # With STREAM enabled but stream_source() returning None, HA shows
-    # "does not support play stream service" errors on every click.
-    # For now: camera shows still images from push event thumbnails.
-    _attr_supported_features = CameraEntityFeature.ON_OFF
 
     def __init__(self, coordinator: EufySecurityCoordinator, device: DeviceData) -> None:
         EufySecurityEntity.__init__(self, coordinator, device, "camera")
@@ -60,9 +60,19 @@ class EufyCamera(EufySecurityEntity, Camera):
         self._p2p_session: P2PSession | None = None
         self._last_image: bytes | None = None
         self._ffmpeg_process: asyncio.subprocess.Process | None = None
-        self._ffmpeg_pipe_path: str | None = None
-        self._pipe_fd: int | None = None
+        self._pipe_w: int | None = None  # write end of os.pipe()
         self._stream_url: str | None = None
+
+    # ----- Feature flags (dynamic) -----
+
+    @property
+    def supported_features(self) -> CameraEntityFeature:
+        """Include STREAM only when a live stream is available."""
+        features = CameraEntityFeature.ON_OFF
+        sm = self.coordinator.stream_manager
+        if self._stream_url or (sm and sm.is_streaming(self._device_sn)):
+            features |= CameraEntityFeature.STREAM
+        return features
 
     @property
     def is_on(self) -> bool:
@@ -108,23 +118,32 @@ class EufyCamera(EufySecurityEntity, Camera):
 
         return self._last_image
 
-    # ----- Stream source (MUST return fast — never start P2P here) -----
+    # ----- Stream source (lazy setup) -----
 
     async def stream_source(self) -> str | None:
-        """Return stream URL if active. Never blocks, never starts a connection."""
-        # If preemptive stream is running, set up ffmpeg pipe
+        """Return stream URL if a live stream is active.
+
+        If the preemptive stream manager has an active session, this sets up
+        the ffmpeg pipeline lazily and returns the TCP loopback URL.
+        Returns None if no stream is active (HA then falls back to still image).
+        """
+        if self._stream_url:
+            return self._stream_url
+
+        # Check if preemptive stream is running
         sm = self.coordinator.stream_manager
-        if sm and sm.is_streaming(self._device_sn) and not self._stream_url:
+        if sm and sm.is_streaming(self._device_sn):
             session = sm.get_session(self._device_sn)
             if session:
-                await self._setup_ffmpeg_pipe(session)
+                await self._setup_ffmpeg(session)
+                return self._stream_url
 
-        return self._stream_url
+        return None
 
     # ----- On/Off -----
 
     async def async_turn_on(self) -> None:
-        """Start live stream (user clicks play)."""
+        """Start live stream (user clicks Turn On)."""
         if self._stream_url:
             return
 
@@ -190,62 +209,85 @@ class EufyCamera(EufySecurityEntity, Camera):
     # ----- P2P + ffmpeg -----
 
     async def _start_p2p_stream(self) -> None:
+        """Start a P2P stream with ffmpeg transcoding."""
         session = await self._ensure_p2p_session()
         if not session:
             return
         d = self._device
-        await self._setup_ffmpeg_pipe(session)
+        await self._setup_ffmpeg(session)
         if not self._stream_url:
             return
         started = await session.start_livestream(channel=d.device_channel if d else 0)
         if not started:
             await self._cleanup_ffmpeg()
 
-    async def _setup_ffmpeg_pipe(self, session: P2PSession) -> None:
+    async def _setup_ffmpeg(self, session: P2PSession) -> None:
+        """Set up ffmpeg to transcode P2P H264 data to mpegts via TCP loopback.
+
+        Uses os.pipe() (anonymous kernel pipe) instead of a named pipe to avoid
+        deadlocks: ffmpeg creates the TCP listener immediately, then starts
+        reading from the pipe once a client (HA) connects.
+        """
         if self._stream_url:
             return
-        pipe_dir = tempfile.mkdtemp(prefix="eufy_")
-        self._ffmpeg_pipe_path = os.path.join(pipe_dir, "video.pipe")
-        os.mkfifo(self._ffmpeg_pipe_path)
+
+        # Create anonymous pipe: ffmpeg reads from pipe_r, we write to pipe_w
+        pipe_r, pipe_w = os.pipe()
+
+        # Set write end to non-blocking so the P2P callback never stalls
+        flags = fcntl.fcntl(pipe_w, fcntl.F_GETFL)
+        fcntl.fcntl(pipe_w, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
         port = await self._find_free_port()
         out_url = f"tcp://127.0.0.1:{port}?listen=1"
-        self._stream_url = f"tcp://127.0.0.1:{port}"
 
         self._ffmpeg_process = await asyncio.create_subprocess_exec(
             "ffmpeg", "-hide_banner", "-loglevel", "warning",
             "-fflags", "+genpts+discardcorrupt",
-            "-f", "h264", "-i", self._ffmpeg_pipe_path,
-            "-c:v", "copy", "-f", "mpegts", out_url,
+            "-f", "h264", "-i", "pipe:0",
+            "-c:v", "copy", "-an",
+            "-f", "mpegts", out_url,
+            stdin=pipe_r,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        self._pipe_fd = None
+        # Close our copy of the read end — ffmpeg inherited it
+        os.close(pipe_r)
+
+        self._pipe_w = pipe_w
+        self._stream_url = f"tcp://127.0.0.1:{port}"
+
+        _LOGGER.info(
+            "ffmpeg stream ready for %s at %s (pid=%d)",
+            self._device_sn, self._stream_url,
+            self._ffmpeg_process.pid if self._ffmpeg_process.pid else 0,
+        )
 
         def on_data(data: StreamData) -> None:
+            """Write P2P video data to the ffmpeg pipe (non-blocking)."""
             if not data.is_video or not data.data:
                 return
-            if self._pipe_fd is None:
-                try:
-                    self._pipe_fd = os.open(self._ffmpeg_pipe_path, os.O_WRONLY | os.O_NONBLOCK)
-                except OSError:
-                    return
+            if self._pipe_w is None:
+                return
             try:
-                os.write(self._pipe_fd, data.data)
+                os.write(self._pipe_w, data.data)
+            except BlockingIOError:
+                pass  # pipe buffer full, drop frame
             except OSError:
-                pass
-            self._last_image = data.data
+                pass  # pipe broken
 
         session.set_stream_callback(on_data)
         session.set_disconnect_callback(self._on_disconnect)
 
     async def _cleanup_ffmpeg(self) -> None:
-        if self._pipe_fd is not None:
+        """Tear down the ffmpeg process and pipe."""
+        if self._pipe_w is not None:
             try:
-                os.close(self._pipe_fd)
+                os.close(self._pipe_w)
             except OSError:
                 pass
-            self._pipe_fd = None
+            self._pipe_w = None
+
         if self._ffmpeg_process:
             try:
                 self._ffmpeg_process.send_signal(signal.SIGTERM)
@@ -256,13 +298,7 @@ class EufyCamera(EufySecurityEntity, Camera):
                 except Exception:
                     pass
             self._ffmpeg_process = None
-        if self._ffmpeg_pipe_path:
-            try:
-                os.unlink(self._ffmpeg_pipe_path)
-                os.rmdir(os.path.dirname(self._ffmpeg_pipe_path))
-            except OSError:
-                pass
-            self._ffmpeg_pipe_path = None
+
         self._stream_url = None
 
     # ----- Helpers -----
