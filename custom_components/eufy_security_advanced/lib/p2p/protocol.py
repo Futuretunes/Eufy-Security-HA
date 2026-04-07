@@ -40,9 +40,12 @@ class UDPPacket:
 
 @dataclass
 class DataMessage:
-    """Parsed DATA (F1 D0) message payload."""
+    """Parsed DATA (F1 D0) message payload.
 
-    bytes_to_read: int
+    Wire format (both incoming and outgoing — NO bytes_to_read prefix):
+      [data_type(2,BE)] [sequence(2,BE)] [data...]
+    """
+
     data_type: int
     sequence: int
     data: bytes
@@ -50,14 +53,12 @@ class DataMessage:
     @classmethod
     def parse(cls, payload: bytes) -> DataMessage | None:
         """Parse a DATA message payload."""
-        if len(payload) < 6:
+        if len(payload) < 4:
             return None
-        bytes_to_read = struct.unpack(">H", payload[0:2])[0]
-        data_type = struct.unpack(">H", payload[2:4])[0]
-        sequence = struct.unpack(">H", payload[4:6])[0]
-        data = payload[6:]
+        data_type = struct.unpack(">H", payload[0:2])[0]
+        sequence = struct.unpack(">H", payload[2:4])[0]
+        data = payload[4:]
         return cls(
-            bytes_to_read=bytes_to_read,
             data_type=data_type,
             sequence=sequence,
             data=data,

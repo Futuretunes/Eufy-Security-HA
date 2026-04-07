@@ -53,23 +53,21 @@ class TestUDPPacket:
         assert data[4:] == b"\x01\x02"
 
 
-class TestDataMessage:
+class TestDataMessageParse:
     def test_parse(self):
         payload = (
-            struct.pack(">H", 100)       # bytes_to_read
-            + struct.pack(">H", 0xD100)  # data_type
-            + struct.pack(">H", 42)      # sequence
+            struct.pack(">H", 0xD100)  # data_type
+            + struct.pack(">H", 42)    # sequence
             + b"payload_data"
         )
         msg = DataMessage.parse(payload)
         assert msg is not None
-        assert msg.bytes_to_read == 100
         assert msg.data_type == 0xD100
         assert msg.sequence == 42
         assert msg.data == b"payload_data"
 
     def test_parse_too_short(self):
-        assert DataMessage.parse(b"\x00") is None
+        assert DataMessage.parse(b"\x00\x00\x00") is None
 
 
 class TestXZYHHeader:
