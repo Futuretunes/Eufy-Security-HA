@@ -223,9 +223,10 @@ class TestTalkbackFrame:
 
 class TestAddressParsing:
     def test_parse_lookup_addr(self):
-        # Build a payload: 6 padding bytes + port(2B LE) + ip(4B reversed)
-        payload = b"\x00" * 6
-        payload += struct.pack("<H", 32100)
+        # Payload layout (header already stripped):
+        # [0-1] splitter, [2-3] port LE, [4-7] IP reversed
+        payload = b"\x00\x02"  # splitter
+        payload += struct.pack("<H", 32100)  # port
         payload += bytes([1, 168, 192, 10])  # reversed: 10.192.168.1
         result = parse_lookup_addr(payload)
         assert result == ("10.192.168.1", 32100)
@@ -234,10 +235,11 @@ class TestAddressParsing:
         assert parse_lookup_addr(b"\x00" * 5) is None
 
     def test_parse_lookup_addr2(self):
-        payload = b"\x00" * 6
-        payload += struct.pack("<H", 32100)
+        # [0-1] splitter, [2-3] port LE, [4-7] IP reversed, [8-15] padding, [16-19] token
+        payload = b"\x00\x02"  # splitter
+        payload += struct.pack("<H", 32100)  # port
         payload += bytes([1, 0, 0, 127])  # reversed: 127.0.0.1
-        payload += b"\x00" * 8  # padding to offset 20
+        payload += b"\x00" * 8  # padding
         payload += b"\xAB\xCD\xEF\x01"  # data token
         result = parse_lookup_addr2(payload)
         assert result is not None

@@ -416,28 +416,36 @@ def build_data_message(
 # ---------------------------------------------------------------------------
 
 def parse_lookup_addr(payload: bytes) -> tuple[str, int] | None:
-    """Parse a LOOKUP_ADDR (F1 40) response to extract device IP:port.
+    """Parse a LOOKUP_ADDR (F1 40) response payload (header already stripped).
 
-    Bytes 6-7: port (uint16 LE)
-    Bytes 8-11: IP (reversed byte order)
+    The 4-byte UDP header (msg_type + length) is stripped by UDPPacket.parse().
+    Payload layout:
+      [0-1] splitter (0x00 0x02)
+      [2-3] port (uint16 LE)
+      [4-7] IP (reversed byte order: [7].[6].[5].[4])
     """
-    if len(payload) < 12:
+    if len(payload) < 8:
         return None
-    port = struct.unpack("<H", payload[6:8])[0]
-    ip = f"{payload[11]}.{payload[10]}.{payload[9]}.{payload[8]}"
+    port = struct.unpack("<H", payload[2:4])[0]
+    ip = f"{payload[7]}.{payload[6]}.{payload[5]}.{payload[4]}"
     return (ip, port)
 
 
 def parse_lookup_addr2(payload: bytes) -> tuple[tuple[str, int], bytes] | None:
-    """Parse a LOOKUP_ADDR2 (F1 82) response.
+    """Parse a LOOKUP_ADDR2 (F1 82) response payload (header already stripped).
 
-    Returns ((ip, port), data_token).
+    Payload layout:
+      [0-1] splitter
+      [2-3] port (uint16 LE)
+      [4-7] IP (reversed byte order)
+      [8-15] padding
+      [16-19] TURN data token
     """
-    if len(payload) < 24:
+    if len(payload) < 20:
         return None
-    port = struct.unpack("<H", payload[6:8])[0]
-    ip = f"{payload[11]}.{payload[10]}.{payload[9]}.{payload[8]}"
-    data_token = payload[20:24]
+    port = struct.unpack("<H", payload[2:4])[0]
+    ip = f"{payload[7]}.{payload[6]}.{payload[5]}.{payload[4]}"
+    data_token = payload[16:20]
     return ((ip, port), data_token)
 
 
