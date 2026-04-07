@@ -177,9 +177,9 @@ class EufySecurityConfigFlow(ConfigFlow, domain=DOMAIN):
         # config flow descriptions can't render images reliably
         if self._captcha_img:
             img_tag = self._captcha_img
-            # If it's base64 data, make a data URI
-            if not img_tag.startswith("http"):
-                img_tag = f"data:image/jpeg;base64,{img_tag}"
+            # Only add data URI prefix if not already present
+            if not img_tag.startswith("http") and not img_tag.startswith("data:"):
+                img_tag = f"data:image/png;base64,{img_tag}"
             try:
                 await self.hass.services.async_call(
                     "persistent_notification",
