@@ -61,6 +61,15 @@ class EufyCamera(EufySecurityEntity, Camera):
     if StreamType is not None:
         _attr_frontend_stream_type = StreamType.HLS
 
+    async def async_handle_async_webrtc_offer(self, *args, **kwargs) -> None:
+        """Reject WebRTC — force the frontend to use HLS instead.
+
+        go2rtc registers itself as the WebRTC provider for ALL cameras,
+        but its Python client crashes parsing our stream's producer list
+        (missing 'url' field). Override to prevent the crash loop.
+        """
+        raise NotImplementedError("Use HLS")
+
     def __init__(self, coordinator: EufySecurityCoordinator, device: DeviceData) -> None:
         EufySecurityEntity.__init__(self, coordinator, device, "camera")
         Camera.__init__(self)
