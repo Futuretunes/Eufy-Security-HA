@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -47,7 +48,7 @@ async def async_setup_entry(
 class _DeviceSelect(EufySecurityEntity, SelectEntity):
     _param_type: int = 0
     _value_map: dict[str, str] = {}
-    _attr_entity_category = "config"
+    _attr_entity_category = EntityCategory.CONFIG
 
     @property
     def current_option(self) -> str | None:
@@ -147,7 +148,7 @@ class EufyWatermarkSelect(_DeviceSelect):
 class EufyPowerSourceSelect(_DeviceSelect):
     _attr_name = "Power Source"
     _attr_icon = "mdi:power-plug"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _param_type = 2046  # powerSource
     _value_map = {"Battery": "0", "Solar Panel": "1", "Plugged In": "2"}
 
@@ -158,7 +159,7 @@ class EufyPowerSourceSelect(_DeviceSelect):
 class EufyPowerModeSelect(_DeviceSelect):
     _attr_name = "Power Working Mode"
     _attr_icon = "mdi:battery-clock"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _param_type = 2047  # powerWorkingMode
     _value_map = {"Optimal Battery Life": "0", "Optimal Surveillance": "1", "Custom Recording": "2"}
 
@@ -172,7 +173,7 @@ class EufyPowerModeSelect(_DeviceSelect):
 class EufyAlarmVolumeSelect(EufyStationEntity, SelectEntity):
     _attr_name = "Alarm Volume"
     _attr_icon = "mdi:volume-high"
-    _attr_entity_category = "config"
+    _attr_entity_category = EntityCategory.CONFIG
 
     _value_map = {
         "Mute": "0", "Low": "1", "Medium": "2", "High": "3",

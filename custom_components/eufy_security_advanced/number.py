@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant.components.number import NumberEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -40,7 +41,7 @@ async def async_setup_entry(
 # ---------------------------------------------------------------------------
 class _ParamNumber(EufySecurityEntity, NumberEntity):
     _param_type: int = 0
-    _attr_entity_category = "config"
+    _attr_entity_category = EntityCategory.CONFIG
 
     @property
     def native_value(self) -> float | None:
@@ -124,7 +125,7 @@ class EufyFloodlightBrightness(_ParamNumber):
 class EufyAlarmDelay(EufyStationEntity, NumberEntity):
     _attr_name = "Alarm Delay"
     _attr_icon = "mdi:timer-alert"
-    _attr_entity_category = "config"
+    _attr_entity_category = EntityCategory.CONFIG
     _attr_native_min_value = 0
     _attr_native_max_value = 60
     _attr_native_step = 1

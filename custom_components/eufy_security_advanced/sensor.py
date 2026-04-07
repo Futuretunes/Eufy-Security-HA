@@ -14,6 +14,7 @@ from homeassistant.const import (
     UnitOfTemperature,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -66,7 +67,7 @@ class EufyBatterySensor(EufySecurityEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.BATTERY
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, device):
         super().__init__(coordinator, device, "battery")
@@ -82,7 +83,7 @@ class EufyBatteryTempSensor(EufySecurityEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, device):
         super().__init__(coordinator, device, "battery_temp")
@@ -102,7 +103,7 @@ class EufyBatteryTempSensor(EufySecurityEntity, SensorEntity):
 
 class EufyChargingStatusSensor(EufySecurityEntity, SensorEntity):
     _attr_name = "Charging Status"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:battery-charging"
 
     def __init__(self, coordinator, device):
@@ -124,7 +125,7 @@ class EufyWifiSensor(EufySecurityEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.SIGNAL_STRENGTH
     _attr_native_unit_of_measurement = SIGNAL_STRENGTH_DECIBELS_MILLIWATT
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, device):
         super().__init__(coordinator, device, "wifi_rssi")
@@ -137,7 +138,7 @@ class EufyWifiSensor(EufySecurityEntity, SensorEntity):
 
 class EufyWifiSignalLevelSensor(EufySecurityEntity, SensorEntity):
     _attr_name = "WiFi Signal Level"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:wifi"
 
     def __init__(self, coordinator, device):
@@ -160,7 +161,7 @@ class EufyWifiSignalLevelSensor(EufySecurityEntity, SensorEntity):
 
 class EufyLastEventSensor(EufySecurityEntity, SensorEntity):
     _attr_name = "Last Event"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:history"
 
     def __init__(self, coordinator, device):
@@ -181,7 +182,7 @@ class EufyLastEventSensor(EufySecurityEntity, SensorEntity):
 
 class EufyStreamStatusSensor(EufySecurityEntity, SensorEntity):
     _attr_name = "Stream Status"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:video"
 
     def __init__(self, coordinator, device):
@@ -217,7 +218,7 @@ _GUARD_MODE_NAMES = {
 
 class EufyGuardModeSensor(EufyStationEntity, SensorEntity):
     _attr_name = "Guard Mode"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:security"
 
     def __init__(self, coordinator, station):
@@ -233,7 +234,7 @@ class EufyGuardModeSensor(EufyStationEntity, SensorEntity):
 
 class EufyCurrentModeSensor(EufyStationEntity, SensorEntity):
     _attr_name = "Current Mode"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:security"
 
     def __init__(self, coordinator, station):
@@ -249,7 +250,7 @@ class EufyCurrentModeSensor(EufyStationEntity, SensorEntity):
 
 class EufyStationFirmwareSensor(EufyStationEntity, SensorEntity):
     _attr_name = "Firmware"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:update"
 
     def __init__(self, coordinator, station):
@@ -266,7 +267,7 @@ class EufyStationFirmwareSensor(EufyStationEntity, SensorEntity):
 # ---------------------------------------------------------------------------
 class EufyFirmwareSensor(EufySecurityEntity, SensorEntity):
     _attr_name = "Firmware"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:update"
 
     def __init__(self, coordinator, device):
@@ -286,7 +287,7 @@ class EufyPushStatusSensor(SensorEntity):
 
     _attr_has_entity_name = False
     _attr_name = "Eufy Security Push Status"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:bell-ring"
 
     def __init__(self, coordinator) -> None:

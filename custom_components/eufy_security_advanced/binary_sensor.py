@@ -10,6 +10,7 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -129,7 +130,7 @@ class EufyPetSensor(_AutoClearMixin, EufySecurityEntity, BinarySensorEntity):
 class EufyVehicleSensor(_AutoClearMixin, EufySecurityEntity, BinarySensorEntity):
     _attr_name = "Vehicle Detected"
     _attr_device_class = BinarySensorDeviceClass.MOTION
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
     _clear_attr = "vehicle_detected"
 
     def __init__(self, coordinator, device):
@@ -213,7 +214,7 @@ class EufyDoorSensor(EufySecurityEntity, BinarySensorEntity):
 class EufyBatteryLowSensor(EufySecurityEntity, BinarySensorEntity):
     _attr_name = "Battery Low"
     _attr_device_class = BinarySensorDeviceClass.BATTERY
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, device):
         super().__init__(coordinator, device, "battery_low")
@@ -229,7 +230,7 @@ class EufyBatteryLowSensor(EufySecurityEntity, BinarySensorEntity):
 class EufyConnectedSensor(EufySecurityEntity, BinarySensorEntity):
     _attr_name = "Connected"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, device):
         super().__init__(coordinator, device, "connected")
@@ -246,7 +247,7 @@ class EufyConnectedSensor(EufySecurityEntity, BinarySensorEntity):
 class EufyStationConnectedSensor(EufyStationEntity, BinarySensorEntity):
     _attr_name = "Connected"
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator, station):
         super().__init__(coordinator, station, "connected")

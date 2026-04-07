@@ -228,7 +228,10 @@ class EufyCloudApi:
                 raw = decrypt_api_data(data, self._shared_key)
                 text = get_null_terminated_string(raw)
                 parsed = json.loads(text)
-                _LOGGER.debug("Decrypted response: %d items" if isinstance(parsed, list) else "Decrypted response: dict", len(parsed) if isinstance(parsed, list) else 0)
+                if isinstance(parsed, list):
+                    _LOGGER.debug("Decrypted response: %d items", len(parsed))
+                else:
+                    _LOGGER.debug("Decrypted response: dict")
                 return parsed
             except Exception as err:
                 _LOGGER.warning("Decrypt failed (%s), trying plain JSON. Data starts with: %s", err, repr(data[:80]) if len(data) > 80 else repr(data))
@@ -515,16 +518,14 @@ class EufyCloudApi:
                     raw=raw,
                 )
 
-                # Extract cover/event image URL from cloud data
-                cover = (
-                    raw.get("cover_path")
-                    or raw.get("pic_url")
-                    or raw.get("event_pic_url")
-                    or raw.get("last_pic_url")
-                    or ""
-                )
-                if cover:
-                    device.last_event_pic_url = cover
+                # Extract event image URL from cloud data.
+                # cover_path is a local SD card path (not a URL) — skip it.
+                # Only use fields that are actual HTTP URLs.
+                for url_field in ("pic_url", "event_pic_url", "last_pic_url", "cover_path"):
+                    val = raw.get(url_field, "")
+                    if val and (val.startswith("http://") or val.startswith("https://")):
+                        device.last_event_pic_url = val
+                        break
 
                 # WiFi RSSI
                 wifi = raw.get("wifi_rssi") or raw.get("wifiRssi") or 0
@@ -691,13 +692,13 @@ class EufyCloudApi:
                 sn = event.get("device_sn", "")
                 if not sn or sn in seen:
                     continue
-                pic = (
-                    event.get("pic_url")
-                    or event.get("cover_path")
-                    or event.get("thumb_url")
-                    or event.get("file_path")
-                    or ""
-                )
+                # Only use actual HTTP URLs, not local SD card paths
+                pic = ""
+                for field in ("pic_url", "thumb_url", "cover_path", "file_path"):
+                    val = event.get(field, "")
+                    if val and (val.startswith("http://") or val.startswith("https://")):
+                        pic = val
+                        break
                 if pic and sn in self.devices:
                     device = self.devices[sn]
                     if not device.last_event_pic_url:

@@ -7,6 +7,7 @@ import logging
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -87,7 +88,7 @@ class EufyAlarmStopButton(EufyStationEntity, ButtonEntity):
 class EufyRebootButton(EufyStationEntity, ButtonEntity):
     _attr_name = "Reboot"
     _attr_icon = "mdi:restart"
-    _attr_entity_category = "config"
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator, station):
         super().__init__(coordinator, station, "reboot")

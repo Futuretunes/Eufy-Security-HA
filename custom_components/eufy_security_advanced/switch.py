@@ -7,6 +7,7 @@ import logging
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -52,7 +53,7 @@ class _ParamSwitch(EufySecurityEntity, SwitchEntity):
     _param_type: int = 0
     _on_value: str = "1"
     _off_value: str = "0"
-    _attr_entity_category = "config"
+    _attr_entity_category = EntityCategory.CONFIG
 
     @property
     def is_on(self) -> bool | None:
