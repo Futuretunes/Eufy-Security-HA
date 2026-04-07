@@ -248,28 +248,28 @@ class TestAddressParsing:
 
 class TestDataMessage:
     def test_build_data_message_gateway_info(self):
-        """CMD_GATEWAYINFO with empty payload should produce 22-byte packet."""
+        """CMD_GATEWAYINFO with empty payload should produce 26-byte packet (16-byte XZYH header)."""
         pkt = build_data_message(P2PDataType.DATA, 0, 1100)
-        assert len(pkt) == 22
+        assert len(pkt) == 26  # 4 (UDP) + 6 (envelope) + 16 (XZYH header)
         parsed = UDPPacket.parse(pkt)
         assert parsed.msg_type == P2PMessageType.DATA
-        # The envelope should contain XZYH
         assert MAGIC_WORD in parsed.payload
-        # Check XZYH header structure: head_len(2) + data_type(2) + seq(2) + XZYH(4) + cmd(2) + payload_len(4) + ch(1) + sign(1)
+        # head_len should be 16 (16-byte XZYH header, no payload)
         head_len = struct.unpack(">H", parsed.payload[0:2])[0]
-        assert head_len == 12  # 4+2+4+1+1 = 12 bytes for empty payload
-        # Command type should be 1100 (0x044C LE)
+        assert head_len == 16
+        # Command type at offset 10 (after head_len(2) + data_type(2) + seq(2) + XZYH(4))
         cmd = struct.unpack("<H", parsed.payload[10:12])[0]
         assert cmd == 1100
-        # Payload length should be 0
+        # Payload length at offset 12
         payload_len = struct.unpack("<I", parsed.payload[12:16])[0]
         assert payload_len == 0
 
     def test_build_data_message_with_channel(self):
-        """Channel and sign_code should appear in XZYH header."""
+        """Channel and sign_code at offsets 18-19 in the 16-byte XZYH header."""
         pkt = build_data_message(P2PDataType.DATA, 5, 1003, b"\xff" * 4, channel=2, sign_code=1)
         parsed = UDPPacket.parse(pkt)
-        # After head_len(2) + data_type(2) + seq(2) + XZYH(4) + cmd(2) + payload_len(4)
-        # channel is at offset 16, sign_code at offset 17
-        assert parsed.payload[16] == 2   # channel
-        assert parsed.payload[17] == 1   # sign_code
+        # 16-byte XZYH header: XZYH(4)+cmd(2)+paylen(4)+pad(2)+ch(1)+sign(1)+type(1)+pad(1)
+        # In parsed.payload: head_len(2) + data_type(2) + seq(2) + [XZYH header starts at 6]
+        # channel at offset 6+12=18, sign_code at 6+13=19
+        assert parsed.payload[18] == 2   # channel
+        assert parsed.payload[19] == 1   # sign_code

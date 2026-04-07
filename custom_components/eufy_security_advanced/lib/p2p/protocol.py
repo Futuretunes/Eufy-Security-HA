@@ -359,18 +359,22 @@ def build_data_message(
 ) -> bytes:
     """Build a complete DATA (F1 D0) packet with XZYH command header.
 
-    Wire format (matches eufy-security-client TypeScript implementation):
+    Wire format (16-byte XZYH header matching HomeBase expectations):
       [F1 D0] [envelope_len(2,BE)]
       [head_len(2,BE)] [data_type(2,BE)] [seq(2,BE)]
-      [XZYH(4)] [cmd_type(2,LE)] [payload_len(4,LE)] [channel(1)] [sign_code(1)]
+      [XZYH(4)] [cmd(2,LE)] [payload_len(4,LE)] [pad(2)] [ch(1)] [sign(1)] [type(1)] [pad(1)]
       [payload...]
     """
-    # Build "head" = XZYH extended header + payload
+    # Build "head" = 16-byte XZYH header + payload
+    # The HomeBase uses the same 16-byte header format for both sending and
+    # receiving, with channel/sign_code at offsets 12-13 (not 10-11).
     head = (
-        MAGIC_WORD                              # 4 bytes
-        + struct.pack("<H", command_type)        # 2 bytes LE
-        + struct.pack("<I", len(payload))        # 4 bytes LE (payload length)
-        + bytes([channel, sign_code])            # 2 bytes
+        MAGIC_WORD                              # 4 bytes  (offset 0-3)
+        + struct.pack("<H", command_type)        # 2 bytes LE (offset 4-5)
+        + struct.pack("<I", len(payload))        # 4 bytes LE (offset 6-9)
+        + b"\x00\x00"                           # 2 bytes padding (offset 10-11)
+        + bytes([channel, sign_code])            # 2 bytes (offset 12-13)
+        + b"\x00\x00"                           # msg_type=0 + pad (offset 14-15)
         + payload                               # variable
     )
 

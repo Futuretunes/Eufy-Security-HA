@@ -1,6 +1,6 @@
 [project]
 name = "eufy-security-advanced"
-version = "0.4.6"
+version = "0.4.7"
 description = "Pure Python Eufy Security integration for Home Assistant (HACS)"
 requires-python = ">=3.11"
 dependencies = [
