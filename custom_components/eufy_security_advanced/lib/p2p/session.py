@@ -224,6 +224,7 @@ class P2PSession:
 
         # Connection established
         self._connected = True
+        self._gateway_ready = asyncio.Event()
         _LOGGER.info(
             "P2P connected to %s at %s (local=%s)",
             self._station_sn, self._connect_address, self._is_local,
@@ -232,8 +233,14 @@ class P2PSession:
         # Start heartbeat
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
-        # Send gateway info to negotiate encryption
+        # Send gateway info to negotiate encryption and wait for response
         await self._send_gateway_info()
+        try:
+            await asyncio.wait_for(self._gateway_ready.wait(), timeout=10.0)
+            _LOGGER.info("P2P handshake complete for %s", self._station_sn)
+        except asyncio.TimeoutError:
+            _LOGGER.warning("P2P gateway info timeout for %s — proceeding without encryption", self._station_sn)
+            self._gateway_ready.set()  # Allow commands anyway
 
         return True
 
@@ -321,7 +328,7 @@ class P2PSession:
         """Main receive loop — processes all incoming UDP packets."""
         loop = asyncio.get_event_loop()
 
-        while True:
+        while self._sock is not None:
             try:
                 data, addr = await loop.sock_recvfrom(self._sock, 1_048_576)
             except (OSError, asyncio.CancelledError):
@@ -335,6 +342,8 @@ class P2PSession:
                 continue
 
             try:
+                if self._connected:
+                    _LOGGER.debug("P2P recv: type=0x%04X len=%d from=%s", pkt.msg_type, len(pkt.payload), addr)
                 await self._handle_packet(pkt, addr, connected_event)
             except Exception:
                 _LOGGER.debug("Error handling packet type 0x%04X", pkt.msg_type, exc_info=True)
@@ -531,16 +540,22 @@ class P2PSession:
         """Send CMD_GATEWAYINFO to negotiate encryption."""
         payload = build_command_void()
         seq = self._next_sequence()
+        # Gateway info is sent on the DATA channel (command type 1100)
         pkt = build_data_message(
             P2PDataType.DATA, seq, CommandType.CMD_GATEWAYINFO, payload
         )
+        _LOGGER.debug("Sending CMD_GATEWAYINFO seq=%d", seq)
         self._send_to(pkt)
 
     async def _handle_gateway_info(self, data: bytes) -> None:
         """Process the gateway info response to establish encryption."""
+        _LOGGER.info("Gateway info response received (%d bytes)", len(data))
+
         if len(data) < 4:
             _LOGGER.debug("Gateway info too short, using no encryption")
             self._encryption_level = P2PEncryptionLevel.NONE
+            if hasattr(self, "_gateway_ready"):
+                self._gateway_ready.set()
             return
 
         cipher_id = struct.unpack("<H", data[0:2])[0]
@@ -552,12 +567,13 @@ class P2PSession:
                 ciphers = await self._get_cipher([cipher_id], self._admin_user_id)
                 rsa_key_pem = ciphers.get(cipher_id, "")
                 if rsa_key_pem:
-                    # Extract encrypted AES key from the response
                     encrypted_key = data[4:].split(b"\x00")[0]
                     if encrypted_key:
                         self._p2p_key = derive_p2p_key_level2(encrypted_key, rsa_key_pem)
                         self._encryption_level = P2PEncryptionLevel.LEVEL_2
                         _LOGGER.info("P2P encryption: Level 2 (RSA+AES)")
+                        if hasattr(self, "_gateway_ready"):
+                            self._gateway_ready.set()
                         return
             except Exception:
                 _LOGGER.debug("Level 2 encryption setup failed", exc_info=True)
@@ -570,6 +586,9 @@ class P2PSession:
         except Exception:
             self._encryption_level = P2PEncryptionLevel.NONE
             _LOGGER.info("P2P encryption: None")
+
+        if hasattr(self, "_gateway_ready"):
+            self._gateway_ready.set()
 
     def _handle_camera_info(self, data: bytes) -> None:
         """Handle camera info parameters."""
