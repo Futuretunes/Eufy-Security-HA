@@ -173,10 +173,29 @@ class EufySecurityConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.exception("CAPTCHA error")
                 errors["base"] = "unknown"
 
+        # Show the CAPTCHA image via persistent notification since
+        # config flow descriptions can't render images reliably
+        if self._captcha_img:
+            img_tag = self._captcha_img
+            # If it's base64 data, make a data URI
+            if not img_tag.startswith("http"):
+                img_tag = f"data:image/jpeg;base64,{img_tag}"
+            try:
+                await self.hass.services.async_call(
+                    "persistent_notification",
+                    "create",
+                    {
+                        "title": "Eufy Security CAPTCHA",
+                        "message": f"![CAPTCHA]({img_tag})\n\nEnter this CAPTCHA in the integration setup dialog.",
+                        "notification_id": "eufy_captcha",
+                    },
+                )
+            except Exception:
+                _LOGGER.warning("Could not create CAPTCHA notification")
+
         return self.async_show_form(
             step_id="captcha",
             data_schema=vol.Schema({vol.Required("captcha_answer"): str}),
-            description_placeholders={"captcha_img": self._captcha_img},
             errors=errors,
         )
 

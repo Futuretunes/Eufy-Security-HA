@@ -19,7 +19,7 @@
       },
       "captcha": {
         "title": "CAPTCHA Verification",
-        "description": "Please solve the CAPTCHA below.",
+        "description": "Eufy requires a CAPTCHA. Check your HA notifications (bell icon) to see the image, then enter the answer below.",
         "data": {
           "captcha_answer": "CAPTCHA Answer"
         }
