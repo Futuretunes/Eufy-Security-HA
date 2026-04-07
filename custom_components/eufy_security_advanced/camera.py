@@ -18,7 +18,12 @@ import logging
 import os
 import signal
 
-from homeassistant.components.camera import Camera, CameraEntityFeature, StreamType
+from homeassistant.components.camera import Camera, CameraEntityFeature
+
+try:
+    from homeassistant.components.camera import StreamType
+except ImportError:
+    StreamType = None
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -53,7 +58,8 @@ class EufyCamera(EufySecurityEntity, Camera):
     """Camera entity — still image preview, live stream on demand."""
 
     _attr_name = "Camera"
-    _attr_frontend_stream_type = StreamType.HLS
+    if StreamType is not None:
+        _attr_frontend_stream_type = StreamType.HLS
 
     def __init__(self, coordinator: EufySecurityCoordinator, device: DeviceData) -> None:
         EufySecurityEntity.__init__(self, coordinator, device, "camera")
