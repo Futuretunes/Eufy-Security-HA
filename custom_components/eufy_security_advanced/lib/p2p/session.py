@@ -642,15 +642,24 @@ class P2PSession:
         """Handle a video frame."""
         vf = VideoFrameHeader.parse(data)
         if not vf:
+            _LOGGER.debug("VIDEO: parse failed, data_len=%d first_bytes=%s", len(data), data[:20].hex())
             return
+
+        _LOGGER.debug(
+            "VIDEO FRAME: len=%d keyframe=%s stream=%d seq=%d fps=%d %dx%d sign=%d got_kf=%s",
+            vf.data_length, vf.is_keyframe, vf.stream_type, vf.sequence,
+            vf.fps, vf.width, vf.height, sign_code, self._got_keyframe,
+        )
 
         video_data = data[22:]  # After the 22-byte video header
 
         # Decrypt if encrypted
         if sign_code > 0 and len(video_data) >= 128:
             video_data = decrypt_video_frame(data, self._rsa_private_key)
+            _LOGGER.debug("VIDEO: RSA decrypted %d -> %d bytes", len(data[22:]), len(video_data) if video_data else 0)
 
         if not video_data or len(video_data) > MAX_FRAME_SIZE:
+            _LOGGER.debug("VIDEO: dropped — size=%d (max=%d)", len(video_data) if video_data else 0, MAX_FRAME_SIZE)
             return
 
         # Detect codec
@@ -666,7 +675,9 @@ class P2PSession:
         if not self._got_keyframe:
             if vf.is_keyframe:
                 self._got_keyframe = True
+                _LOGGER.info("VIDEO: got first keyframe seq=%d %dx%d %s", vf.sequence, vf.width, vf.height, self._video_codec)
             else:
+                _LOGGER.debug("VIDEO: waiting for keyframe (seq=%d is_kf=%s)", vf.sequence, vf.is_keyframe)
                 return
 
         if self._on_stream_data:
