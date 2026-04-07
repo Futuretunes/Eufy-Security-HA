@@ -263,8 +263,9 @@ class EufyCamera(EufySecurityEntity, Camera):
         )
         self._stream_url = f"tcp://127.0.0.1:{port}"
 
-        # Forward ffmpeg stdout → TCP clients
+        # Forward ffmpeg stdout → TCP clients, and log stderr
         self._forward_task = asyncio.create_task(self._forward_ffmpeg_output())
+        asyncio.create_task(self._log_ffmpeg_stderr())
 
         _LOGGER.info(
             "Stream ready for %s at %s (ffmpeg pid=%d)",
@@ -327,6 +328,23 @@ class EufyCamera(EufySecurityEntity, Camera):
             return
         except Exception:
             _LOGGER.debug("Forward task ended", exc_info=True)
+
+    async def _log_ffmpeg_stderr(self) -> None:
+        """Log ffmpeg stderr output to diagnose H264 parsing issues."""
+        if not self._ffmpeg_process or not self._ffmpeg_process.stderr:
+            return
+        try:
+            while True:
+                line = await self._ffmpeg_process.stderr.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace").rstrip()
+                if text:
+                    _LOGGER.warning("ffmpeg: %s", text)
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            pass
 
     async def _cleanup_ffmpeg(self) -> None:
         """Tear down ffmpeg, TCP server, and pipe."""

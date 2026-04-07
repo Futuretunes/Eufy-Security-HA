@@ -618,10 +618,16 @@ class P2PSession:
             return
 
         video_data = data[22:]  # After the 22-byte video header
+        frame_count = getattr(self, "_video_frame_count", 0)
+        self._video_frame_count = frame_count + 1
 
-        # Decrypt if encrypted
+        # Decrypt if encrypted (RSA per-frame encryption)
         if sign_code > 0 and len(video_data) >= 128:
+            pre_len = len(video_data)
             video_data = decrypt_video_frame(data, self._rsa_private_key)
+            if frame_count == 0:
+                first_bytes = video_data[:16].hex() if video_data else "empty"
+                _LOGGER.info("VIDEO: RSA decrypt %d -> %d bytes, starts=%s", pre_len, len(video_data), first_bytes)
 
         if not video_data or len(video_data) > MAX_FRAME_SIZE:
             return
@@ -634,10 +640,6 @@ class P2PSession:
                 self._video_codec = VideoCodec.H265
             else:
                 self._video_codec = self._detect_video_codec(video_data)
-
-        # Log first frame or keyframes
-        frame_count = getattr(self, "_video_frame_count", 0)
-        self._video_frame_count = frame_count + 1
         if frame_count == 0:
             _LOGGER.info(
                 "VIDEO: first frame seq=%d kf=%s %dx%d fps=%d %s sign=%d len=%d",
