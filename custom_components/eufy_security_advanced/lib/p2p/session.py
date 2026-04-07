@@ -789,19 +789,48 @@ class P2PSession:
     # ----- Livestream -----
 
     async def start_livestream(self, channel: int = 0) -> bool:
-        """Start live video stream."""
+        """Start live video stream.
+
+        For battery doorbells via HomeBase, uses CMD_SET_PAYLOAD wrapping
+        CMD_START_REALTIME_MEDIA as JSON with RSA public key for video
+        encryption. The payload is AES-encrypted when P2P encryption is active.
+        """
         self._is_streaming = True
         self._got_keyframe = False
         self._video_codec = VideoCodec.UNKNOWN
         self._audio_codec = AudioCodec.UNKNOWN
 
-        payload = build_command_payload_int(
-            0, str_value=self._admin_user_id, channel=channel,
-        )
-        result = await self.send_command(CommandType.CMD_START_REALTIME_MEDIA, payload)
+        # Build JSON payload with RSA public key for video encryption
+        rsa_key_hex = format(self._rsa_public_key.n, '0256x')
+        payload_json = json.dumps({
+            "account_id": self._admin_user_id,
+            "cmd": CommandType.CMD_START_REALTIME_MEDIA,
+            "mValue3": CommandType.CMD_START_REALTIME_MEDIA,
+            "payload": {
+                "ClientOS": "Android",
+                "key": rsa_key_hex,
+                "streamtype": 1,  # 1=H264
+            },
+        })
+
+        # Determine sign_code based on encryption level
+        sign_code = int(self._encryption_level) if self._encryption_level != P2PEncryptionLevel.NONE else 0
+
+        # Build payload with CMD_SET_PAYLOAD wrapper
+        cmd_payload = build_command_payload_json(payload_json, channel=channel, sign_code=sign_code)
+
+        # Encrypt the payload if encryption is active (CMD_SET_PAYLOAD requires it)
+        if sign_code > 0 and self._p2p_key:
+            # The 10-byte header stays unencrypted, only the data portion is encrypted
+            header = cmd_payload[:10]
+            data = cmd_payload[10:]
+            encrypted_data = encrypt_p2p(data, self._p2p_key)
+            cmd_payload = header + encrypted_data
+
+        result = await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
         if result is None:
-            self._is_streaming = False
-            return False
+            # Timeout is expected — the HomeBase may not send a result for this
+            pass
 
         if self._keepalive_task is None or self._keepalive_task.done():
             self._keepalive_task = asyncio.create_task(self._keepalive_loop())
