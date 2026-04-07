@@ -356,19 +356,21 @@ class P2PSession:
         """Dispatch a received packet by type."""
         mt = pkt.msg_type
 
-        # ----- Lookup responses -----
+        # ----- Lookup responses (only before connected!) -----
         if mt == P2PMessageType.LOOKUP_ADDR:
-            result = parse_lookup_addr(pkt.payload)
-            if result:
-                _LOGGER.debug("LOOKUP_ADDR: %s", result)
-                self._send_check_cam(result)
+            if not self._connected:
+                result = parse_lookup_addr(pkt.payload)
+                if result:
+                    _LOGGER.debug("LOOKUP_ADDR: %s", result)
+                    self._send_check_cam(result)
 
         elif mt == P2PMessageType.LOOKUP_ADDR2:
-            result = parse_lookup_addr2(pkt.payload)
-            if result:
-                (ip, port), token = result
-                _LOGGER.debug("LOOKUP_ADDR2: %s:%d token=%s", ip, port, token.hex())
-                self._send_check_cam((ip, port))
+            if not self._connected:
+                result = parse_lookup_addr2(pkt.payload)
+                if result:
+                    (ip, port), token = result
+                    _LOGGER.debug("LOOKUP_ADDR2: %s:%d token=%s", ip, port, token.hex())
+                    self._send_check_cam((ip, port))
 
         elif mt == 0xF141 and not self._connected:
             # LOCAL_LOOKUP_RESP or CAM_ID — check p2p_did
