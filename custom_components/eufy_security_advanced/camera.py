@@ -250,9 +250,12 @@ class EufyCamera(EufySecurityEntity, Camera):
         fcntl.fcntl(pipe_w, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
         # Start ffmpeg: reads H264 from pipe, writes mpegts to stdout
+        # -framerate 15: tells the raw H264 demuxer the fps so it generates
+        # proper PTS/DTS timestamps (required by the mpegts muxer)
         self._ffmpeg_process = await asyncio.create_subprocess_exec(
             "ffmpeg", "-hide_banner", "-loglevel", "warning",
             "-fflags", "+genpts+discardcorrupt",
+            "-framerate", "15",
             "-f", "h264", "-i", "pipe:0",
             "-c:v", "copy", "-an",
             "-f", "mpegts", "pipe:1",
