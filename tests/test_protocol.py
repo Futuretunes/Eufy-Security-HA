@@ -173,36 +173,41 @@ class TestPacketBuilders:
 
 class TestCommandPayloads:
     def test_void_payload(self):
-        payload = build_command_void()
-        assert len(payload) == 0
+        payload = build_command_void(channel=255)
+        assert len(payload) == 10
+        assert payload[6] == 255  # channel
+        assert payload[4] == 0x01  # magic
+        assert payload[5] == 0x00
 
     def test_int_payload(self):
-        payload = build_command_payload_int(42)
-        # 4 byte int + 128 byte string + 4 byte sub = 136
-        assert len(payload) == 136
-        value = struct.unpack("<I", payload[0:4])[0]
+        payload = build_command_payload_int(42, channel=0)
+        # 10 byte header + 4 byte int + 128 byte string
+        assert len(payload) == 10 + 4 + 128
+        value = struct.unpack("<I", payload[10:14])[0]
         assert value == 42
 
     def test_int_string_payload(self):
         payload = build_command_payload_int_string(
-            value=1, value_sub=2, str_value="test",
+            value=1, value_sub=2, str_value="test", channel=3,
         )
-        # 4 + 4 + 128 + 128 = 264
-        assert len(payload) == 264
-        value_sub = struct.unpack("<I", payload[0:4])[0]
-        value = struct.unpack("<I", payload[4:8])[0]
+        # 10 byte header + 4 + 4 + 128 + 128
+        assert len(payload) == 10 + 4 + 4 + 128 + 128
+        value_sub = struct.unpack("<I", payload[10:14])[0]
+        value = struct.unpack("<I", payload[14:18])[0]
         assert value_sub == 2
         assert value == 1
 
     def test_json_payload(self):
         json_str = '{"test": true}'
-        payload = build_command_payload_json(json_str)
-        assert payload == json_str.encode("utf-8")
+        payload = build_command_payload_json(json_str, channel=255)
+        # 10 byte header + json bytes
+        assert len(payload) == 10 + len(json_str.encode())
+        assert payload[6] == 255  # channel
 
     def test_string_payload(self):
         payload = build_command_payload_string("hello", "world")
-        # 5 zero bytes + 128 + 128 = 261
-        assert len(payload) == 261
+        # 10 byte header + 5 zero bytes + 128 + 128
+        assert len(payload) == 10 + 5 + 128 + 128
 
 
 class TestTalkbackFrame:
@@ -248,28 +253,27 @@ class TestAddressParsing:
 
 class TestDataMessage:
     def test_build_data_message_gateway_info(self):
-        """CMD_GATEWAYINFO with empty payload should produce 26-byte packet (16-byte XZYH header)."""
-        pkt = build_data_message(P2PDataType.DATA, 0, 1100)
-        assert len(pkt) == 26  # 4 (UDP) + 6 (envelope) + 16 (XZYH header)
+        """CMD_GATEWAYINFO with void payload should produce 24-byte packet."""
+        payload = build_command_void(channel=255)  # 10-byte void payload
+        pkt = build_data_message(P2PDataType.DATA, 0, 1100, payload)
+        assert len(pkt) == 24  # 4 (UDP) + 10 (cmd header) + 10 (void payload)
         parsed = UDPPacket.parse(pkt)
         assert parsed.msg_type == P2PMessageType.DATA
         assert MAGIC_WORD in parsed.payload
-        # head_len should be 16 (16-byte XZYH header, no payload)
-        head_len = struct.unpack(">H", parsed.payload[0:2])[0]
-        assert head_len == 16
-        # Command type at offset 10 (after head_len(2) + data_type(2) + seq(2) + XZYH(4))
-        cmd = struct.unpack("<H", parsed.payload[10:12])[0]
+        # No bytes_to_read field! Format: [data_type(2)] [seq(2)] [XZYH(4)] [cmd(2)] [payload(10)]
+        cmd = struct.unpack("<H", parsed.payload[8:10])[0]
         assert cmd == 1100
-        # Payload length at offset 12
-        payload_len = struct.unpack("<I", parsed.payload[12:16])[0]
-        assert payload_len == 0
+        # Payload magic 0x0100 at offset 14 (cmd_header(10) + data_len(2) + pad(2))
+        assert parsed.payload[14] == 0x01
+        assert parsed.payload[15] == 0x00
+        # Channel=255 at offset 16
+        assert parsed.payload[16] == 0xFF
 
     def test_build_data_message_with_channel(self):
-        """Channel and sign_code at offsets 18-19 in the 16-byte XZYH header."""
-        pkt = build_data_message(P2PDataType.DATA, 5, 1003, b"\xff" * 4, channel=2, sign_code=1)
+        """Channel in the 10-byte payload header at offset 6 of payload."""
+        inner_payload = build_command_payload_int(42, channel=2, sign_code=1)
+        pkt = build_data_message(P2PDataType.DATA, 5, 1003, inner_payload)
         parsed = UDPPacket.parse(pkt)
-        # 16-byte XZYH header: XZYH(4)+cmd(2)+paylen(4)+pad(2)+ch(1)+sign(1)+type(1)+pad(1)
-        # In parsed.payload: head_len(2) + data_type(2) + seq(2) + [XZYH header starts at 6]
-        # channel at offset 6+12=18, sign_code at 6+13=19
-        assert parsed.payload[18] == 2   # channel
-        assert parsed.payload[19] == 1   # sign_code
+        # Channel at cmd_header(10) + payload_header offset 6 = offset 16
+        assert parsed.payload[16] == 2   # channel
+        assert parsed.payload[17] == 1   # sign_code

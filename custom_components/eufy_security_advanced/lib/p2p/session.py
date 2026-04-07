@@ -41,6 +41,7 @@ from .protocol import (
     build_check_cam,
     build_command_payload_int,
     build_command_payload_json,
+    build_command_void,
     build_data_message,
     build_end,
     build_local_lookup,
@@ -539,9 +540,10 @@ class P2PSession:
 
     async def _send_gateway_info(self) -> None:
         """Send CMD_GATEWAYINFO to negotiate encryption."""
+        payload = build_command_void(channel=255)  # 255 = station channel
         seq = self._next_sequence()
         pkt = build_data_message(
-            P2PDataType.DATA, seq, CommandType.CMD_GATEWAYINFO
+            P2PDataType.DATA, seq, CommandType.CMD_GATEWAYINFO, payload
         )
         _LOGGER.debug("Sending CMD_GATEWAYINFO seq=%d (%d bytes): %s", seq, len(pkt), pkt.hex())
         self._send_to(pkt)
@@ -737,11 +739,11 @@ class P2PSession:
         command_type: int,
         payload: bytes = b"",
         data_type: int = P2PDataType.DATA,
-        channel: int = 0,
-        sign_code: int = 0,
     ) -> bytes | None:
         """Send a command and wait for ACK + result.
 
+        The payload should already include the 10-byte header from the
+        payload builders (channel, sign_code, etc. are embedded in it).
         Returns the command result data, or None on timeout.
         """
         if not self._connected:
@@ -752,7 +754,7 @@ class P2PSession:
             payload = encrypt_p2p(payload, self._p2p_key)
 
         seq = self._next_sequence()
-        pkt = build_data_message(data_type, seq, command_type, payload, channel, sign_code)
+        pkt = build_data_message(data_type, seq, command_type, payload)
 
         # Wait for ACK
         ack_future: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
@@ -792,10 +794,8 @@ class P2PSession:
         self._video_codec = VideoCodec.UNKNOWN
         self._audio_codec = AudioCodec.UNKNOWN
 
-        payload = build_command_payload_int(0)
-        result = await self.send_command(
-            CommandType.CMD_START_REALTIME_MEDIA, payload, channel=channel,
-        )
+        payload = build_command_payload_int(0, channel=channel)
+        result = await self.send_command(CommandType.CMD_START_REALTIME_MEDIA, payload)
         if result is None:
             self._is_streaming = False
             return False
@@ -808,10 +808,8 @@ class P2PSession:
     async def stop_livestream(self, channel: int = 0) -> None:
         """Stop live video stream."""
         self._is_streaming = False
-        payload = build_command_payload_int(0)
-        await self.send_command(
-            CommandType.CMD_STOP_REALTIME_MEDIA, payload, channel=channel,
-        )
+        payload = build_command_payload_int(0, channel=channel)
+        await self.send_command(CommandType.CMD_STOP_REALTIME_MEDIA, payload)
 
         if self._keepalive_task and not self._keepalive_task.done():
             self._keepalive_task.cancel()
@@ -852,8 +850,8 @@ class P2PSession:
                 "user_name": nick_name,
             },
         })
-        cmd_payload = build_command_payload_json(payload_json)
-        await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload, channel=255)
+        cmd_payload = build_command_payload_json(payload_json, channel=255)
+        await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
 
     async def reset_station_alarm(self) -> None:
         """Stop the station alarm siren."""
@@ -868,10 +866,9 @@ class P2PSession:
             value=duration,
             value_sub=channel,
             str_value=self._admin_user_id,
+            channel=channel,
         )
-        await self.send_command(
-            CommandType.CMD_SET_DEVS_TONE_FILE, payload, channel=channel,
-        )
+        await self.send_command(CommandType.CMD_SET_DEVS_TONE_FILE, payload)
 
     async def reset_device_alarm(self, channel: int = 0) -> None:
         """Stop a device-specific alarm."""
@@ -904,10 +901,8 @@ class P2PSession:
                 "userName": nick_name,
             },
         })
-        cmd_payload = build_command_payload_json(payload_json)
-        await self.send_command(
-            CommandType.CMD_SET_PAYLOAD, cmd_payload, channel=device_channel,
-        )
+        cmd_payload = build_command_payload_json(payload_json, channel=device_channel)
+        await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
 
     async def lock_device_ble(
         self,
@@ -961,10 +956,8 @@ class P2PSession:
                 "payload": _b64.b64encode(enc_payload).decode(),
             },
         })
-        cmd_payload = build_command_payload_json(outer_json)
-        await self.send_command(
-            CommandType.CMD_SET_PAYLOAD, cmd_payload, channel=device_channel,
-        )
+        cmd_payload = build_command_payload_json(outer_json, channel=device_channel)
+        await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
 
     async def lock_device_smart(
         self,
@@ -1014,10 +1007,8 @@ class P2PSession:
                 "time": timestamp,
             },
         })
-        cmd_payload = build_command_payload_json(outer_json)
-        await self.send_command(
-            CommandType.CMD_SET_PAYLOAD, cmd_payload, channel=device_channel,
-        )
+        cmd_payload = build_command_payload_json(outer_json, channel=device_channel)
+        await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
 
     # ----- RTSP control -----
 
@@ -1028,8 +1019,9 @@ class P2PSession:
             value=1 if enable else 0,
             value_sub=channel,
             str_value=self._admin_user_id,
+            channel=channel,
         )
-        await self.send_command(CommandType.CMD_NAS_SWITCH, payload, channel=channel)
+        await self.send_command(CommandType.CMD_NAS_SWITCH, payload)
 
     async def start_rtsp_stream(self, channel: int = 0) -> None:
         """Start the RTSP stream on a camera. The RTSP URL is returned via event."""
@@ -1038,8 +1030,9 @@ class P2PSession:
             value=1,
             value_sub=channel,
             str_value=self._admin_user_id,
+            channel=channel,
         )
-        await self.send_command(CommandType.CMD_NAS_TEST, payload, channel=channel)
+        await self.send_command(CommandType.CMD_NAS_TEST, payload)
 
     async def stop_rtsp_stream(self, channel: int = 0) -> None:
         """Stop the RTSP stream on a camera."""
@@ -1048,8 +1041,9 @@ class P2PSession:
             value=0,
             value_sub=channel,
             str_value=self._admin_user_id,
+            channel=channel,
         )
-        await self.send_command(CommandType.CMD_NAS_TEST, payload, channel=channel)
+        await self.send_command(CommandType.CMD_NAS_TEST, payload)
 
     # ----- Talkback (two-way audio) -----
 
@@ -1065,15 +1059,11 @@ class P2PSession:
 
         if use_doorbell_cmd:
             payload_json = json.dumps({"commandType": 1001})  # CMD_START_SPEAK
-            cmd_payload = build_command_payload_json(payload_json)
-            await self.send_command(
-                CommandType.CMD_DOORBELL_SET_PAYLOAD, cmd_payload, channel=channel,
-            )
+            cmd_payload = build_command_payload_json(payload_json, channel=channel)
+            await self.send_command(CommandType.CMD_DOORBELL_SET_PAYLOAD, cmd_payload)
         else:
-            payload = build_command_payload_int(0)
-            await self.send_command(
-                CommandType.CMD_START_TALKBACK, payload, channel=channel,
-            )
+            payload = build_command_payload_int(0, channel=channel)
+            await self.send_command(CommandType.CMD_START_TALKBACK, payload)
 
     async def stop_talkback(self, channel: int = 0, use_doorbell_cmd: bool = False) -> None:
         """Stop talkback."""
@@ -1081,15 +1071,11 @@ class P2PSession:
 
         if use_doorbell_cmd:
             payload_json = json.dumps({"commandType": 1002})  # CMD_END_SPEAK
-            cmd_payload = build_command_payload_json(payload_json)
-            await self.send_command(
-                CommandType.CMD_DOORBELL_SET_PAYLOAD, cmd_payload, channel=channel,
-            )
+            cmd_payload = build_command_payload_json(payload_json, channel=channel)
+            await self.send_command(CommandType.CMD_DOORBELL_SET_PAYLOAD, cmd_payload)
         else:
-            payload = build_command_payload_int(0)
-            await self.send_command(
-                CommandType.CMD_STOP_TALKBACK, payload, channel=channel,
-            )
+            payload = build_command_payload_int(0, channel=channel)
+            await self.send_command(CommandType.CMD_STOP_TALKBACK, payload)
 
     def send_talkback_audio(self, audio_data: bytes, channel: int = 0) -> None:
         """Send a talkback audio frame to the device.
@@ -1126,9 +1112,10 @@ class P2PSession:
         """Send CMD_PING keepalive for battery-powered devices."""
         while self._connected and self._is_streaming:
             try:
+                payload = build_command_void(channel=255)
                 seq = self._next_sequence()
                 pkt = build_data_message(
-                    P2PDataType.DATA, seq, CommandType.CMD_PING,
+                    P2PDataType.DATA, seq, CommandType.CMD_PING, payload,
                 )
                 self._send_to(pkt)
                 await asyncio.sleep(KEEPALIVE_INTERVAL)

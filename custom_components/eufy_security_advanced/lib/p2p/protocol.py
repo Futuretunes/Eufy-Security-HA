@@ -250,40 +250,60 @@ def build_command_header(
     )
 
 
+def _payload_header(data_len: int, channel: int = 0, sign_code: int = 0) -> bytes:
+    """Build the standard 10-byte payload header prefix.
+
+    All outgoing payload builders share this structure:
+      [data_len(2,LE)] [00 00] [01 00] [channel] [sign_code] [00 00]
+    """
+    return (
+        struct.pack("<H", data_len)
+        + b"\x00\x00"
+        + b"\x01\x00"
+        + bytes([channel, sign_code])
+        + b"\x00\x00"
+    )
+
+
 def build_command_payload_int(
     value: int,
     str_value: str = "",
+    channel: int = 0,
+    sign_code: int = 0,
 ) -> bytes:
-    """Build a 'WithInt' command payload (data portion only).
+    """Build a 'WithInt' command payload with 10-byte header.
 
-    Structure: [value(4,LE)] [str_value(128, zero-padded)] [str_value_sub(4, zeros)]
-    Total: 136 bytes. Channel/sign_code are set in the XZYH header by build_data_message.
+    Structure: [header(10)] [value(4,LE)] [str_value(128, padded)]
     """
     str_bytes = str_value.encode("utf-8").ljust(128, b"\x00")[:128]
-    return struct.pack("<I", value) + str_bytes + b"\x00" * 4
+    data = struct.pack("<I", value) + str_bytes
+    return _payload_header(len(data), channel, sign_code) + data
 
 
 def build_command_payload_string(
     str_value: str,
     str_value_sub: str = "",
+    channel: int = 0,
+    sign_code: int = 0,
 ) -> bytes:
-    """Build a 'WithString' command payload (data portion only).
+    """Build a 'WithString' command payload with 10-byte header.
 
-    Structure: [0x00(1)] [0x00000000(4,LE)] [str_value(128)] [str_value_sub(128)]
-    Total: 261 bytes. Channel/sign_code are set in the XZYH header by build_data_message.
+    Structure: [header(10)] [0x00(5)] [str_value(128)] [str_value_sub(128)]
     """
     str_bytes = str_value.encode("utf-8").ljust(128, b"\x00")[:128]
     str_sub_bytes = str_value_sub.encode("utf-8").ljust(128, b"\x00")[:128]
-    return b"\x00" * 5 + str_bytes + str_sub_bytes
+    data = b"\x00" * 5 + str_bytes + str_sub_bytes
+    return _payload_header(len(data), channel, sign_code) + data
 
 
-def build_command_payload_json(json_str: str) -> bytes:
-    """Build a 'WithStringPayload' command payload for JSON commands (data portion only).
-
-    Returns the raw JSON string bytes. Channel/sign_code are set in the XZYH
-    header by build_data_message.
-    """
-    return json_str.encode("utf-8")
+def build_command_payload_json(
+    json_str: str,
+    channel: int = 255,
+    sign_code: int = 0,
+) -> bytes:
+    """Build a 'WithStringPayload' command payload with 10-byte header."""
+    json_bytes = json_str.encode("utf-8")
+    return _payload_header(len(json_bytes), channel, sign_code) + json_bytes
 
 
 def build_command_payload_int_string(
@@ -291,15 +311,17 @@ def build_command_payload_int_string(
     value_sub: int,
     str_value: str = "",
     str_value_sub: str = "",
+    channel: int = 0,
+    sign_code: int = 0,
 ) -> bytes:
-    """Build a 'WithIntString' command payload (data portion only).
+    """Build a 'WithIntString' command payload with 10-byte header.
 
-    Structure: [valueSub(4,LE)] [value(4,LE)] [strValue(128)] [strValueSub(128)]
-    Total: 264 bytes. Channel/sign_code are set in the XZYH header by build_data_message.
+    Structure: [header(10)] [valueSub(4,LE)] [value(4,LE)] [strValue(128)] [strValueSub(128)]
     """
     str_bytes = str_value.encode("utf-8").ljust(128, b"\x00")[:128]
     str_sub_bytes = str_value_sub.encode("utf-8").ljust(128, b"\x00")[:128]
-    return struct.pack("<I", value_sub) + struct.pack("<I", value) + str_bytes + str_sub_bytes
+    data = struct.pack("<I", value_sub) + struct.pack("<I", value) + str_bytes + str_sub_bytes
+    return _payload_header(len(data), channel, sign_code) + data
 
 
 def build_talkback_audio_frame(
@@ -340,13 +362,12 @@ def build_talkback_audio_frame(
     return cmd_header + frame_header + audio_data
 
 
-def build_command_void() -> bytes:
-    """Build a 'WithoutData' (void) command payload — empty bytes.
+def build_command_void(channel: int = 255, sign_code: int = 0) -> bytes:
+    """Build a 'WithoutData' (void) command payload — just the 10-byte header.
 
-    DEPRECATED: Use b"" directly. Kept for backward compatibility.
-    Channel/sign_code are now set in build_data_message's XZYH header.
+    Default channel=255 for station-level commands (CMD_GATEWAYINFO, CMD_PING).
     """
-    return b""
+    return _payload_header(0, channel, sign_code)
 
 
 def build_data_message(
@@ -354,39 +375,27 @@ def build_data_message(
     sequence: int,
     command_type: int,
     payload: bytes = b"",
-    channel: int = 0,
-    sign_code: int = 0,
 ) -> bytes:
-    """Build a complete DATA (F1 D0) packet with XZYH command header.
+    """Build a complete DATA (F1 D0) packet.
 
-    Wire format (16-byte XZYH header matching HomeBase expectations):
-      [F1 D0] [envelope_len(2,BE)]
-      [head_len(2,BE)] [data_type(2,BE)] [seq(2,BE)]
-      [XZYH(4)] [cmd(2,LE)] [payload_len(4,LE)] [pad(2)] [ch(1)] [sign(1)] [type(1)] [pad(1)]
-      [payload...]
+    Outgoing wire format (NO bytes_to_read field — that only exists in responses):
+      [F1 D0] [payload_len(2,BE)]
+      [data_type(2,BE)] [seq(2,BE)] [XZYH(4)] [cmd(2,LE)]
+      [payload_with_10byte_header...]
+
+    The payload should already include the 10-byte header from the payload
+    builders (build_command_void, build_command_payload_int, etc.).
     """
-    # Build "head" = 16-byte XZYH header + payload
-    # The HomeBase uses the same 16-byte header format for both sending and
-    # receiving, with channel/sign_code at offsets 12-13 (not 10-11).
-    head = (
-        MAGIC_WORD                              # 4 bytes  (offset 0-3)
-        + struct.pack("<H", command_type)        # 2 bytes LE (offset 4-5)
-        + struct.pack("<I", len(payload))        # 4 bytes LE (offset 6-9)
-        + b"\x00\x00"                           # 2 bytes padding (offset 10-11)
-        + bytes([channel, sign_code])            # 2 bytes (offset 12-13)
-        + b"\x00\x00"                           # msg_type=0 + pad (offset 14-15)
-        + payload                               # variable
-    )
-
-    # DATA envelope: [head_len(2,BE)] [data_type(2,BE)] [seq(2,BE)] [head]
-    envelope = (
-        struct.pack(">H", len(head))
-        + struct.pack(">H", data_type)
+    # Command header (10 bytes): [data_type] [seq] [XZYH] [cmd]
+    inner = (
+        struct.pack(">H", data_type)
         + struct.pack(">H", sequence)
-        + head
+        + MAGIC_WORD
+        + struct.pack("<H", command_type)
+        + payload
     )
 
-    return build_udp_packet(P2PMessageType.DATA, envelope)
+    return build_udp_packet(P2PMessageType.DATA, inner)
 
 
 # ---------------------------------------------------------------------------
