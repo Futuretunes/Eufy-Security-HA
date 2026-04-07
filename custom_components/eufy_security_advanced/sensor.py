@@ -284,8 +284,8 @@ class EufyFirmwareSensor(EufySecurityEntity, SensorEntity):
 class EufyPushStatusSensor(SensorEntity):
     """Shows whether FCM push notifications are connected."""
 
-    _attr_has_entity_name = True
-    _attr_name = "Push Notification Status"
+    _attr_has_entity_name = False
+    _attr_name = "Eufy Security Push Status"
     _attr_entity_category = "diagnostic"
     _attr_icon = "mdi:bell-ring"
 
@@ -294,18 +294,5 @@ class EufyPushStatusSensor(SensorEntity):
         self._attr_unique_id = f"{DOMAIN}_push_status"
 
     @property
-    def device_info(self):
-        return None  # Integration-level, not tied to a device
-
-    @property
     def native_value(self) -> str:
         return "Connected" if self.coordinator.push_connected else "Disconnected"
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        return {
-            "p2p_connected_stations": (
-                self.coordinator.p2p_pool.connected_stations
-                if self.coordinator.p2p_pool else []
-            ),
-        }
