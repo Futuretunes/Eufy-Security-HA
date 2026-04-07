@@ -885,15 +885,20 @@ class P2PSession:
             header = cmd_payload[:10]
             data = cmd_payload[10:]
             encrypted_data = encrypt_p2p(data, self._p2p_key)
+            # Update data_len in header to match encrypted size (padded to 16-byte boundary).
+            # The TypeScript client pads BEFORE writing data_len, so data_len = encrypted size.
+            header = struct.pack("<H", len(encrypted_data)) + header[2:]
             cmd_payload = header + encrypted_data
             _LOGGER.debug(
                 "  p2p_key: %s\n"
                 "  plaintext data (%d bytes): %s\n"
                 "  encrypted data (%d bytes): %s\n"
+                "  data_len updated: %d -> %d\n"
                 "  cmd_payload post-encrypt (%d bytes): %s",
                 self._p2p_key.hex(),
                 len(data), data.hex(),
                 len(encrypted_data), encrypted_data.hex(),
+                len(data), len(encrypted_data),
                 len(cmd_payload), cmd_payload.hex(),
             )
 

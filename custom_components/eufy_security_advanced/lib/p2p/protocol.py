@@ -377,37 +377,23 @@ def build_data_message(
     command_type: int,
     payload: bytes = b"",
 ) -> bytes:
-    """Build a complete DATA (F1 D0) packet with full 16-byte XZYH header.
+    """Build a complete DATA (F1 D0) packet.
 
-    Outgoing wire format:
-      [F1 D0] [total_len(2,BE)]
-      [data_type(2,BE)] [seq(2,BE)]
-      [XZYH(4)] [cmd(2,LE)] [bytes_to_read(4,LE)] [pad(2)] [ch(1)] [sign(1)] [type(1)] [pad(1)]
+    Outgoing wire format (short XZYH — only magic+cmd, no bytes_to_read):
+      [F1 D0] [payload_len(2,BE)]
+      [data_type(2,BE)] [seq(2,BE)] [XZYH(4)] [cmd(2,LE)]
       [payload_with_10byte_header...]
 
-    The channel and sign_code are extracted from the 10-byte payload header
-    (bytes [6] and [7]) and placed into the XZYH header. The sign_code in
-    the payload data is cleared to 0 (it belongs in the XZYH header only).
+    The HomeBase uses the 10-byte payload header (channel, sign_code,
+    data_len) to interpret the command. The XZYH is only 6 bytes on
+    outgoing — the full 16-byte XZYH (with bytes_to_read, channel,
+    sign_code fields) only appears in INCOMING responses.
     """
-    # Extract channel and sign_code from the 10-byte payload header
-    channel = payload[6] if len(payload) > 6 else 0
-    sign_code = payload[7] if len(payload) > 7 else 0
-
-    # Clear sign_code in payload data — it's in the XZYH header instead
-    if sign_code > 0 and len(payload) > 7:
-        payload = payload[:7] + b"\x00" + payload[8:]
-
     inner = (
         struct.pack(">H", data_type)
         + struct.pack(">H", sequence)
         + MAGIC_WORD
         + struct.pack("<H", command_type)
-        + struct.pack("<I", len(payload))   # bytes_to_read
-        + b"\x00\x00"                       # padding
-        + bytes([channel])                   # channel
-        + bytes([sign_code])                 # sign_code
-        + b"\x00"                            # type (0 = request)
-        + b"\x00"                            # padding
         + payload
     )
 
