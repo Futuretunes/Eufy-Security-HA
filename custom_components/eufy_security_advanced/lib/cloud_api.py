@@ -378,12 +378,24 @@ class EufyCloudApi:
             "time_zone": 3600000,
         })
 
+        _LOGGER.debug("Station list response code=%s", result.get("code"))
         if result.get("code") != ResponseCode.OK:
             raise EufyCloudApiError(f"Failed to get stations: {result.get('msg')}")
 
-        raw_data = self._decrypt_response(result.get("data", []))
+        raw_response_data = result.get("data", [])
+        _LOGGER.debug(
+            "Station list raw data type=%s len=%s preview=%s",
+            type(raw_response_data).__name__,
+            len(raw_response_data) if isinstance(raw_response_data, (list, str)) else "?",
+            repr(str(raw_response_data)[:200]),
+        )
+
+        raw_data = self._decrypt_response(raw_response_data)
         if not isinstance(raw_data, list):
+            _LOGGER.warning("Station list decrypt result is not a list: type=%s", type(raw_data).__name__)
             raw_data = []
+        else:
+            _LOGGER.info("Station list: %d stations found", len(raw_data))
 
         stations: list[StationData] = []
         for raw in raw_data:
@@ -450,12 +462,29 @@ class EufyCloudApi:
             "time_zone": 3600000,
         })
 
+        _LOGGER.debug("Device list response code=%s", result.get("code"))
         if result.get("code") != ResponseCode.OK:
             raise EufyCloudApiError(f"Failed to get devices: {result.get('msg')}")
 
-        raw_data = self._decrypt_response(result.get("data", []))
+        raw_response_data = result.get("data", [])
+        _LOGGER.debug(
+            "Device list raw data type=%s len=%s preview=%s",
+            type(raw_response_data).__name__,
+            len(raw_response_data) if isinstance(raw_response_data, (list, str)) else "?",
+            repr(str(raw_response_data)[:200]),
+        )
+
+        raw_data = self._decrypt_response(raw_response_data)
         if not isinstance(raw_data, list):
+            _LOGGER.warning("Device list decrypt result is not a list: type=%s val=%s", type(raw_data).__name__, repr(str(raw_data)[:200]))
             raw_data = []
+        else:
+            _LOGGER.info("Device list: %d devices found", len(raw_data))
+            # Dump ALL keys of the first device so we know the exact field names
+            if raw_data:
+                first = raw_data[0]
+                _LOGGER.info("First device ALL keys: %s", list(first.keys()) if isinstance(first, dict) else type(first).__name__)
+                _LOGGER.info("First device data: %s", {k: repr(str(v))[:80] for k, v in first.items()} if isinstance(first, dict) else repr(str(first))[:300])
 
         devices: list[DeviceData] = []
         for raw in raw_data:
@@ -619,10 +648,20 @@ class EufyCloudApi:
             "storage": 0,
         })
 
+        _LOGGER.debug("History response code=%s", result.get("code"))
         if result.get("code") != ResponseCode.OK:
+            _LOGGER.warning("History fetch failed: code=%s msg=%s", result.get("code"), result.get("msg"))
             return []
 
         raw_data = self._decrypt_response(result.get("data", []))
+        if isinstance(raw_data, list):
+            _LOGGER.info("History: %d events found", len(raw_data))
+            if raw_data:
+                first = raw_data[0]
+                _LOGGER.info("First event keys: %s", list(first.keys()) if isinstance(first, dict) else type(first).__name__)
+                _LOGGER.info("First event data: %s", {k: repr(str(v))[:80] for k, v in first.items()} if isinstance(first, dict) else repr(str(first))[:300])
+        else:
+            _LOGGER.warning("History decrypt result is not a list: type=%s", type(raw_data).__name__)
         return raw_data if isinstance(raw_data, list) else []
 
     async def register_push_token(self, token: str) -> bool:
