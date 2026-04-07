@@ -48,9 +48,11 @@ class EufyCamera(EufySecurityEntity, Camera):
     """Camera entity — still image preview, live stream on demand."""
 
     _attr_name = "Camera"
-    _attr_supported_features = (
-        CameraEntityFeature.ON_OFF | CameraEntityFeature.STREAM
-    )
+    # STREAM feature disabled until P2P streaming is fully working.
+    # With STREAM enabled but stream_source() returning None, HA shows
+    # "does not support play stream service" errors on every click.
+    # For now: camera shows still images from push event thumbnails.
+    _attr_supported_features = CameraEntityFeature.ON_OFF
 
     def __init__(self, coordinator: EufySecurityCoordinator, device: DeviceData) -> None:
         EufySecurityEntity.__init__(self, coordinator, device, "camera")

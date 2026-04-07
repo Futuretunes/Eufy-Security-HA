@@ -247,7 +247,9 @@ class MCSClient:
 
     async def connect(self) -> None:
         """Connect to MCS and authenticate."""
-        ssl_context = ssl.create_default_context()
+        # Create SSL context in executor to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
+        ssl_context = await loop.run_in_executor(None, ssl.create_default_context)
 
         self._reader, self._writer = await asyncio.open_connection(
             FCM_MCS_HOST, FCM_MCS_PORT, ssl=ssl_context
