@@ -222,7 +222,10 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._push_fcm = FCMRegistration(session=session)
             gcm_token = await self._push_fcm.register()
 
-            await self._api.register_push_token(gcm_token)
+            registered = await self._api.register_push_token(gcm_token)
+            _LOGGER.info("Push token registered with Eufy: %s", registered)
+            if not registered:
+                _LOGGER.warning("Eufy rejected our push token — push events won't arrive")
 
             self._push_mcs = MCSClient(
                 android_id=self._push_fcm.android_id,
@@ -269,13 +272,22 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._push_connected = True
         self._last_push_time = time.monotonic()
 
+        # Log ALL incoming MCS messages so we can see what arrives
+        _LOGGER.info("MCS raw message received: category=%s keys=%s",
+                      raw.get("category", "?"),
+                      list(raw.get("app_data", {}).keys())[:10])
+
         msg = parse_push_message(raw)
         if not msg:
+            _LOGGER.info("Push message not parsed (no Eufy payload). Raw app_data: %s",
+                          {k: v[:60] if isinstance(v, str) else v
+                           for k, v in raw.get("app_data", {}).items()})
             return
 
-        _LOGGER.debug(
-            "Push: device=%s event=%d title=%s",
+        _LOGGER.info(
+            "Push: device=%s event=%d title=%s pic=%s",
             msg.device_sn, msg.event_type, msg.title,
+            msg.pic_url[:60] if msg.pic_url else "NONE",
         )
 
         # Update device state from push (immediate, no polling delay)

@@ -690,7 +690,10 @@ class EufyCloudApi:
             "is_notification_enable": True,
             "token": token,
         })
-        return result.get("code") == ResponseCode.OK
+        ok = result.get("code") == ResponseCode.OK
+        _LOGGER.info("Register push token: code=%s msg=%s ok=%s",
+                      result.get("code"), result.get("msg", ""), ok)
+        return ok
 
     async def check_push_token(self) -> bool:
         """Check if the push token is still valid."""

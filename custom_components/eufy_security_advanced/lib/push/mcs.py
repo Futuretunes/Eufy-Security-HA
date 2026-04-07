@@ -362,11 +362,13 @@ class MCSClient:
         try:
             while self._connected:
                 tag, data = await self._read_message()
+                _LOGGER.debug("MCS recv tag=%d len=%d", tag, len(data))
 
                 if tag == TAG_HEARTBEAT_PING:
                     await self._send_message(TAG_HEARTBEAT_ACK, MCSProtobufBuilder.build_heartbeat_ack())
 
                 elif tag == TAG_DATA_MESSAGE:
+                    _LOGGER.info("MCS DataMessage received (%d bytes)", len(data))
                     self._handle_data_message(data)
 
                 elif tag == TAG_CLOSE:
@@ -374,7 +376,7 @@ class MCSClient:
                     break
 
                 elif tag == TAG_IQ_STANZA:
-                    pass  # Ignored
+                    _LOGGER.debug("MCS IQ stanza received")
 
                 elif tag == TAG_STREAM_ERROR:
                     _LOGGER.warning("MCS stream error")
