@@ -207,7 +207,9 @@ class PreemptiveStreamManager:
 
     async def _create_session(self, station: StationData) -> P2PSession | None:
         """Create and connect a P2P session to a station."""
-        dsk_keys = await self._coordinator.api.get_dsk_keys()
+        dsk_keys = await self._coordinator.api.get_dsk_keys(
+            station_sns=[station.station_sn]
+        )
         dsk_data = dsk_keys.get(station.station_sn, {})
         dsk_key = dsk_data.get("dsk_key", "")
 

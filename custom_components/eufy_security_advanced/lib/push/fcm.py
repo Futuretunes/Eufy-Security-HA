@@ -59,7 +59,17 @@ def _build_checkin_proto(android_id: int = 0, security_token: int = 0) -> bytes:
     """Build a minimal protobuf CheckinRequest.
 
     This is a hand-crafted protobuf to avoid requiring compiled proto files.
-    We only include the fields that Google's checkin API requires.
+    Field numbers MUST match the checkin.proto schema exactly:
+      https://github.com/nickoala/nicko-push / bropat/eufy-security-client
+
+    Proto field numbering (CheckinRequest):
+      1=imei, 2=androidId, 4=checkin, 6=locale, 7=loggingId,
+      9=macAddress, 10=meid, 11=accountCookie, 12=timeZone,
+      13=securityToken(fixed64), 14=version, 15=otaCert, 17=esn,
+      19=macAddressType, 20=fragment, 22=userSerialNumber
+
+    Build sub-message (field 1 of Checkin):
+      1=fingerprint, 2=hardware, 3=brand, 4=radio, 6=clientId
     """
     # Protobuf field encoding helpers
     def _varint(value: int) -> bytes:
@@ -74,6 +84,10 @@ def _build_checkin_proto(android_id: int = 0, security_token: int = 0) -> bytes:
         tag = (field_num << 3) | 0  # wire type 0 = varint
         return _varint(tag) + _varint(value)
 
+    def _field_fixed64(field_num: int, value: int) -> bytes:
+        tag = (field_num << 3) | 1  # wire type 1 = 64-bit
+        return _varint(tag) + struct.pack("<Q", value)
+
     def _field_string(field_num: int, value: str | bytes) -> bytes:
         if isinstance(value, str):
             value = value.encode()
@@ -84,39 +98,42 @@ def _build_checkin_proto(android_id: int = 0, security_token: int = 0) -> bytes:
         tag = (field_num << 3) | 2
         return _varint(tag) + _varint(len(data)) + data
 
-    # Build.fingerprint, hardware, brand, radio, clientId (message field 1 of Checkin)
+    # Build sub-message: fingerprint(1), hardware(2), brand(3), radio(4), clientId(6)
     build_msg = (
         _field_string(1, "google/razor/flo:5.0.1/LRX22C/1602158:user/release-keys")
         + _field_string(2, "flo")
         + _field_string(3, "google")
         + _field_string(4, "FLO-04.04")
-        + _field_string(5, "android-google")
+        + _field_string(6, "android-google")  # clientId is field 6, NOT 5
     )
 
-    # Checkin sub-message (field 4)
+    # Checkin sub-message (field 4 of CheckinRequest)
     checkin_msg = (
         _field_submessage(1, build_msg)  # build
-        + _field_varint(3, 0)  # lastCheckinMs
+        + _field_varint(2, 0)  # lastCheckinMs (field 2 of Checkin, NOT 3)
     )
 
-    # Main request
+    # Main CheckinRequest — field numbers must match proto exactly
     request = (
-        _field_string(1, "109269993813709")  # imei
-        + _field_varint(2, android_id)  # androidId
-        + _field_varint(7, security_token)  # securityToken
-        + _field_submessage(4, checkin_msg)  # checkin
-        + _field_string(6, "en")  # locale
-        + _field_varint(8, 1234567890)  # loggingId
-        + _field_string(9, "A1B2C3D4E5F6")  # macAddress
-        + _field_string(10, "109269993813709")  # meid
-        + _field_string(14, "GMT")  # timeZone
-        + _field_varint(16, 3)  # version
-        + _field_string(18, base64.b64decode("71Q6Rn2DDZl1zPDVaaeEHItd+Yg="))  # otaCert
-        + _field_string(19, "ABCDEF01")  # esn
-        + _field_string(21, "wifi")  # macAddressType
-        + _field_varint(22, 0)  # fragment
-        + _field_varint(24, 0)  # userSerialNumber
+        _field_string(1, "109269993813709")          # imei (field 1)
+        + _field_varint(2, android_id)                # androidId (field 2)
+        + _field_submessage(4, checkin_msg)            # checkin (field 4)
+        + _field_string(6, "en")                       # locale (field 6)
+        + _field_varint(7, 1234567890)                 # loggingId (field 7, NOT 8)
+        + _field_string(9, "A1B2C3D4E5F6")            # macAddress (field 9)
+        + _field_string(10, "109269993813709")         # meid (field 10)
+        + _field_string(12, "GMT")                     # timeZone (field 12, NOT 14)
+        + _field_varint(14, 3)                         # version (field 14, NOT 16)
+        + _field_string(15, "71Q6Rn2DDZl1zPDVaaeEHItd+Yg=")  # otaCert (field 15) — base64 STRING, not decoded bytes
+        + _field_string(17, "ABCDEF01")                # esn (field 17, NOT 19)
+        + _field_string(19, "wifi")                    # macAddressType (field 19, NOT 21)
+        + _field_varint(20, 0)                         # fragment (field 20, NOT 22)
+        + _field_varint(22, 0)                         # userSerialNumber (field 22, NOT 24)
     )
+
+    # securityToken: only include on subsequent checkins (it's fixed64, field 13)
+    if security_token:
+        request += _field_fixed64(13, security_token)
 
     return request
 
@@ -124,9 +141,11 @@ def _build_checkin_proto(android_id: int = 0, security_token: int = 0) -> bytes:
 def _parse_checkin_response(data: bytes) -> tuple[int, int]:
     """Parse a protobuf CheckinResponse to extract androidId and securityToken.
 
-    Minimal varint/field parser for the two fields we need:
-    - Field 7 (varint): android_id
-    - Field 11 (varint): security_token
+    From checkin.proto CheckinResponse:
+    - Field 7 (fixed64): androidId
+    - Field 8 (fixed64): securityToken
+
+    Both are fixed64 (wire type 1 = 8 bytes little-endian), NOT varint.
     """
     pos = 0
     android_id = 0
@@ -150,18 +169,21 @@ def _parse_checkin_response(data: bytes) -> tuple[int, int]:
         wire_type = tag & 0x07
 
         if wire_type == 0:  # varint
-            value, pos = read_varint(data, pos)
+            _value, pos = read_varint(data, pos)
+        elif wire_type == 1:  # 64-bit (fixed64)
+            if pos + 8 > len(data):
+                break
+            value = struct.unpack_from("<Q", data, pos)[0]
+            pos += 8
             if field_num == 7:
                 android_id = value
-            elif field_num == 11:
+            elif field_num == 8:
                 security_token = value
         elif wire_type == 2:  # length-delimited
             length, pos = read_varint(data, pos)
             pos += length
         elif wire_type == 5:  # 32-bit
             pos += 4
-        elif wire_type == 1:  # 64-bit
-            pos += 8
         else:
             break
 

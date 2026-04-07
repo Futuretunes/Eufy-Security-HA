@@ -582,15 +582,34 @@ class EufyCloudApi:
         if station_sn in self.stations:
             self.stations[station_sn].guard_mode = mode
 
-    async def get_dsk_keys(self) -> dict[str, dict[str, Any]]:
-        """Get DSK keys for P2P connections."""
-        result = await self._post(API_DSK_KEYS_PATH, {})
-        if result.get("code") != ResponseCode.OK:
-            _LOGGER.warning("Failed to get DSK keys: %s", result.get("msg"))
+    async def get_dsk_keys(self, station_sns: list[str] | None = None) -> dict[str, dict[str, Any]]:
+        """Get DSK keys for P2P connections.
+
+        The working bropat client sends station_sns (list of station serial
+        numbers) and invalid_dsks (map of station_sn -> "") as required
+        parameters. Sending an empty body results in error code 10000.
+        """
+        if station_sns is None:
+            station_sns = list(self.stations.keys())
+
+        if not station_sns:
+            _LOGGER.debug("get_dsk_keys called with no stations")
             return {}
 
+        invalid_dsks: dict[str, str] = {sn: "" for sn in station_sns}
+        result = await self._post(API_DSK_KEYS_PATH, {
+            "station_sns": station_sns,
+            "invalid_dsks": invalid_dsks,
+        })
+        if result.get("code") != ResponseCode.OK:
+            _LOGGER.warning("Failed to get DSK keys: code=%s msg=%s", result.get("code"), result.get("msg"))
+            return {}
+
+        data = result.get("data", {})
+        dsk_keys_list = data.get("dsk_keys", []) if isinstance(data, dict) else []
+
         keys: dict[str, dict[str, Any]] = {}
-        for item in result.get("data", []):
+        for item in dsk_keys_list:
             sn = item.get("station_sn", "")
             if sn:
                 keys[sn] = item
