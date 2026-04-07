@@ -62,6 +62,9 @@ class EufyCamera(EufySecurityEntity, Camera):
         self._ffmpeg_process: asyncio.subprocess.Process | None = None
         self._pipe_w: int | None = None  # write end of os.pipe()
         self._stream_url: str | None = None
+        self._tcp_server: asyncio.Server | None = None
+        self._tcp_clients: list[asyncio.StreamWriter] = []
+        self._forward_task: asyncio.Task | None = None
 
     # ----- Feature flags (dynamic) -----
 
@@ -222,11 +225,12 @@ class EufyCamera(EufySecurityEntity, Camera):
             await self._cleanup_ffmpeg()
 
     async def _setup_ffmpeg(self, session: P2PSession) -> None:
-        """Set up ffmpeg to transcode P2P H264 data to mpegts via TCP loopback.
+        """Set up ffmpeg to transcode P2P H264 data to mpegts.
 
-        Uses os.pipe() (anonymous kernel pipe) instead of a named pipe to avoid
-        deadlocks: ffmpeg creates the TCP listener immediately, then starts
-        reading from the pipe once a client (HA) connects.
+        Architecture: P2P → pipe → ffmpeg (H264→mpegts) → stdout → TCP server → HA
+        We run the TCP server ourselves so the port is open immediately (no
+        race condition with ffmpeg's listen mode). ffmpeg writes mpegts to
+        stdout, and we forward it to all connected TCP clients.
         """
         if self._stream_url:
             return
@@ -238,32 +242,36 @@ class EufyCamera(EufySecurityEntity, Camera):
         flags = fcntl.fcntl(pipe_w, fcntl.F_GETFL)
         fcntl.fcntl(pipe_w, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-        port = await self._find_free_port()
-        out_url = f"tcp://127.0.0.1:{port}?listen=1"
-
+        # Start ffmpeg: reads H264 from pipe, writes mpegts to stdout
         self._ffmpeg_process = await asyncio.create_subprocess_exec(
             "ffmpeg", "-hide_banner", "-loglevel", "warning",
             "-fflags", "+genpts+discardcorrupt",
             "-f", "h264", "-i", "pipe:0",
             "-c:v", "copy", "-an",
-            "-f", "mpegts", out_url,
+            "-f", "mpegts", "pipe:1",
             stdin=pipe_r,
-            stdout=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        # Close our copy of the read end — ffmpeg inherited it
         os.close(pipe_r)
-
         self._pipe_w = pipe_w
+
+        # Start TCP server (port is open immediately — no race)
+        port = await self._find_free_port()
+        self._tcp_server = await asyncio.start_server(
+            self._on_tcp_client, "127.0.0.1", port,
+        )
         self._stream_url = f"tcp://127.0.0.1:{port}"
 
+        # Forward ffmpeg stdout → TCP clients
+        self._forward_task = asyncio.create_task(self._forward_ffmpeg_output())
+
         _LOGGER.info(
-            "ffmpeg stream ready for %s at %s (pid=%d)",
+            "Stream ready for %s at %s (ffmpeg pid=%d)",
             self._device_sn, self._stream_url,
             self._ffmpeg_process.pid if self._ffmpeg_process.pid else 0,
         )
 
-        _bytes_written = [0]
         _frames_written = [0]
 
         def on_data(data: StreamData) -> None:
@@ -275,22 +283,68 @@ class EufyCamera(EufySecurityEntity, Camera):
             try:
                 os.write(self._pipe_w, data.data)
                 _frames_written[0] += 1
-                _bytes_written[0] += len(data.data)
-                if _frames_written[0] in (1, 10, 50):
-                    _LOGGER.info(
-                        "PIPE: wrote %d frames (%d KB) to ffmpeg",
-                        _frames_written[0], _bytes_written[0] // 1024,
-                    )
+                if _frames_written[0] in (1, 10, 100):
+                    _LOGGER.info("PIPE: wrote %d frames to ffmpeg", _frames_written[0])
             except BlockingIOError:
-                _LOGGER.warning("PIPE: buffer full, dropped frame (%d bytes)", len(data.data))
-            except OSError as e:
-                _LOGGER.warning("PIPE: broken (%s), wrote %d frames total", e, _frames_written[0])
+                pass  # pipe full — ffmpeg can't keep up, drop frame
+            except OSError:
+                pass  # pipe broken
 
         session.set_stream_callback(on_data)
         session.set_disconnect_callback(self._on_disconnect)
 
+    async def _on_tcp_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+    ) -> None:
+        """Handle a new TCP client (HA stream component / go2rtc)."""
+        peer = writer.get_extra_info("peername")
+        _LOGGER.info("Stream client connected: %s", peer)
+        self._tcp_clients.append(writer)
+
+    async def _forward_ffmpeg_output(self) -> None:
+        """Read mpegts from ffmpeg stdout and forward to all TCP clients."""
+        if not self._ffmpeg_process or not self._ffmpeg_process.stdout:
+            return
+        try:
+            while True:
+                chunk = await self._ffmpeg_process.stdout.read(32768)
+                if not chunk:
+                    break  # ffmpeg exited
+                dead: list[asyncio.StreamWriter] = []
+                for writer in self._tcp_clients:
+                    try:
+                        writer.write(chunk)
+                        await writer.drain()
+                    except (ConnectionError, OSError):
+                        dead.append(writer)
+                for w in dead:
+                    self._tcp_clients.remove(w)
+                    try:
+                        w.close()
+                    except Exception:
+                        pass
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            _LOGGER.debug("Forward task ended", exc_info=True)
+
     async def _cleanup_ffmpeg(self) -> None:
-        """Tear down the ffmpeg process and pipe."""
+        """Tear down ffmpeg, TCP server, and pipe."""
+        if self._forward_task and not self._forward_task.done():
+            self._forward_task.cancel()
+            self._forward_task = None
+
+        for writer in self._tcp_clients:
+            try:
+                writer.close()
+            except Exception:
+                pass
+        self._tcp_clients.clear()
+
+        if self._tcp_server:
+            self._tcp_server.close()
+            self._tcp_server = None
+
         if self._pipe_w is not None:
             try:
                 os.close(self._pipe_w)
