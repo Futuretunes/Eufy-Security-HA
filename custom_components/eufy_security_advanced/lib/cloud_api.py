@@ -26,11 +26,9 @@ from ..const import (
     API_MCC,
     API_MNC,
     API_NET_TYPE,
-    API_OPENUDID,
     API_OS_TYPE,
     API_OS_VERSION,
     API_PHONE_MODEL,
-    API_SN,
     SERVER_PUBLIC_KEY_DEFAULT,
 )
 from .crypto import (
@@ -92,7 +90,15 @@ class EufyCloudApi:
         # Persistent state
         self._data = persistent_data or CloudPersistentData()
 
-        # ECDH
+        # Generate unique per-installation device identifiers
+        # (avoids Eufy CAPTCHA from shared fingerprints)
+        import hashlib as _hl
+        _seed = (self._email + self._data.client_private_key).encode()
+        _hash = _hl.sha256(_seed).hexdigest()
+        self._openudid = _hash[:16]
+        self._device_sn = _hash[16:28]
+
+        # ECDH — reuse persisted key pair (don't regenerate on every login)
         if self._data.client_private_key:
             self._ecdh = ECDHKeyExchange.from_private_key_hex(self._data.client_private_key)
         else:
@@ -141,7 +147,7 @@ class EufyCloudApi:
             await self._session.close()
 
     def _headers(self) -> dict[str, str]:
-        """Build request headers."""
+        """Build request headers with unique per-installation device IDs."""
         headers = {
             "App_version": API_APP_VERSION,
             "Os_type": API_OS_TYPE,
@@ -149,11 +155,11 @@ class EufyCloudApi:
             "Phone_model": API_PHONE_MODEL,
             "Country": self._country,
             "Language": "en",
-            "Openudid": API_OPENUDID,
+            "Openudid": self._openudid,
             "Net_type": API_NET_TYPE,
             "Mnc": API_MNC,
             "Mcc": API_MCC,
-            "Sn": API_SN,
+            "Sn": self._device_sn,
             "Model_type": "PHONE",
             "Timezone": "GMT+01:00",
             "Cache-Control": "no-cache",
@@ -270,12 +276,8 @@ class EufyCloudApi:
         if not self._api_base:
             await self.discover_api_base()
 
-        # Generate a FRESH ECDH key pair for each login.
-        # The server's ECDH state is per-session — reusing old keys
-        # means the shared secret won't match and response decryption fails.
-        self._ecdh = ECDHKeyExchange()
-        self._data.client_private_key = self._ecdh.private_key_hex
-
+        # Reuse the persisted ECDH key pair (like the real Eufy app).
+        # Generating new keys on every login triggers CAPTCHA.
         # Use the DEFAULT server public key to encrypt the password.
         login_key = self._ecdh.compute_shared_secret(SERVER_PUBLIC_KEY_DEFAULT)
         encrypted_password = encrypt_api_data(self._password, login_key)

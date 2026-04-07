@@ -54,10 +54,12 @@ API_OS_TYPE = "android"
 API_OS_VERSION = "31"
 API_PHONE_MODEL = "ONEPLUS A3003"
 API_NET_TYPE = "wifi"
-API_SN = "75814221ee75"
-API_OPENUDID = "5e4621b0152c0d00"
 API_MNC = "02"
 API_MCC = "262"
+
+# Device identifiers are generated per-installation to avoid
+# Eufy flagging shared fingerprints as suspicious (triggers CAPTCHA).
+# Stored in config entry data after first setup.
 
 # FCM / Push notification constants
 FCM_APP_PACKAGE = "com.oceanwing.battery.cam"
