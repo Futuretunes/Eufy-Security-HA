@@ -106,18 +106,32 @@ class EufySecurityCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             persistent_data=persistent,
         )
 
-        # Always login fresh — the ECDH shared secret must be established
-        # in the same session for response decryption to work. Saved tokens
-        # alone don't work because the server's ECDH state is per-session.
-        try:
-            await asyncio.wait_for(self._login_with_retry(), timeout=30)
-        except asyncio.TimeoutError:
-            raise EufyCloudApiError("Login timed out after 30s")
+        # Only login if we don't have a valid token + server key.
+        # After config flow or a previous successful login, we already have
+        # both — the ECDH shared secret is computed from the persisted keys
+        # in the EufyCloudApi constructor. Re-logging in causes CAPTCHA.
+        if not persistent.auth_token or not persistent.server_public_key:
+            _LOGGER.info("No saved session, logging in fresh")
+            try:
+                await asyncio.wait_for(self._login_with_retry(), timeout=30)
+            except asyncio.TimeoutError:
+                raise EufyCloudApiError("Login timed out after 30s")
+        else:
+            _LOGGER.info("Using saved session (token + ECDH keys)")
 
-        # Fetch initial data (with timeout)
+        # Fetch initial data (with timeout) — this validates the session works
         try:
             await asyncio.wait_for(self._api.get_station_list(), timeout=30)
             await asyncio.wait_for(self._api.get_device_list(), timeout=30)
+        except EufyCloudApiError as err:
+            # Session might be expired — try re-login once
+            _LOGGER.warning("Device fetch failed (%s), re-authenticating", err)
+            try:
+                await asyncio.wait_for(self._login_with_retry(), timeout=30)
+                await asyncio.wait_for(self._api.get_station_list(), timeout=30)
+                await asyncio.wait_for(self._api.get_device_list(), timeout=30)
+            except asyncio.TimeoutError:
+                raise EufyCloudApiError("Device list fetch timed out after re-login")
         except asyncio.TimeoutError:
             raise EufyCloudApiError("Device list fetch timed out")
 
