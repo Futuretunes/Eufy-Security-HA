@@ -749,9 +749,10 @@ class P2PSession:
         if not self._connected:
             raise ConnectionError("Not connected")
 
-        # Encrypt payload if needed
-        if self._encryption_level != P2PEncryptionLevel.NONE and self._p2p_key:
-            payload = encrypt_p2p(payload, self._p2p_key)
+        # Note: outgoing command payloads are NOT encrypted by default.
+        # The TypeScript client only encrypts when signCode != 0, which is
+        # only for specific sensitive commands (lock payloads, etc.).
+        # Normal commands like CMD_START_REALTIME_MEDIA use signCode=0.
 
         seq = self._next_sequence()
         pkt = build_data_message(data_type, seq, command_type, payload)
