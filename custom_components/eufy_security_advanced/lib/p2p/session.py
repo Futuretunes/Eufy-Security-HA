@@ -795,7 +795,9 @@ class P2PSession:
         self._video_codec = VideoCodec.UNKNOWN
         self._audio_codec = AudioCodec.UNKNOWN
 
-        payload = build_command_payload_int(0, channel=channel)
+        payload = build_command_payload_int(
+            0, str_value=self._admin_user_id, channel=channel,
+        )
         result = await self.send_command(CommandType.CMD_START_REALTIME_MEDIA, payload)
         if result is None:
             self._is_streaming = False
