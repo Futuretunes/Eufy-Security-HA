@@ -377,22 +377,37 @@ def build_data_message(
     command_type: int,
     payload: bytes = b"",
 ) -> bytes:
-    """Build a complete DATA (F1 D0) packet.
+    """Build a complete DATA (F1 D0) packet with full 16-byte XZYH header.
 
-    Outgoing wire format (NO bytes_to_read field — that only exists in responses):
-      [F1 D0] [payload_len(2,BE)]
-      [data_type(2,BE)] [seq(2,BE)] [XZYH(4)] [cmd(2,LE)]
+    Outgoing wire format:
+      [F1 D0] [total_len(2,BE)]
+      [data_type(2,BE)] [seq(2,BE)]
+      [XZYH(4)] [cmd(2,LE)] [bytes_to_read(4,LE)] [pad(2)] [ch(1)] [sign(1)] [type(1)] [pad(1)]
       [payload_with_10byte_header...]
 
-    The payload should already include the 10-byte header from the payload
-    builders (build_command_void, build_command_payload_int, etc.).
+    The channel and sign_code are extracted from the 10-byte payload header
+    (bytes [6] and [7]) and placed into the XZYH header. The sign_code in
+    the payload data is cleared to 0 (it belongs in the XZYH header only).
     """
-    # Command header (10 bytes): [data_type] [seq] [XZYH] [cmd]
+    # Extract channel and sign_code from the 10-byte payload header
+    channel = payload[6] if len(payload) > 6 else 0
+    sign_code = payload[7] if len(payload) > 7 else 0
+
+    # Clear sign_code in payload data — it's in the XZYH header instead
+    if sign_code > 0 and len(payload) > 7:
+        payload = payload[:7] + b"\x00" + payload[8:]
+
     inner = (
         struct.pack(">H", data_type)
         + struct.pack(">H", sequence)
         + MAGIC_WORD
         + struct.pack("<H", command_type)
+        + struct.pack("<I", len(payload))   # bytes_to_read
+        + b"\x00\x00"                       # padding
+        + bytes([channel])                   # channel
+        + bytes([sign_code])                 # sign_code
+        + b"\x00"                            # type (0 = request)
+        + b"\x00"                            # padding
         + payload
     )
 
