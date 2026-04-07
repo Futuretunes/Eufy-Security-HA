@@ -545,9 +545,9 @@ class EufyCloudApi:
                         device.params[ptype] = pval
 
                 _LOGGER.debug(
-                    "Device: %s (%s) type=%d cover=%s online=%s battery=%d",
+                    "Device: %s (%s) type=%d pic=%s online=%s battery=%d",
                     device.device_name, device.device_sn, device_type_val,
-                    bool(cover), device.is_online, device.battery_level,
+                    bool(device.last_event_pic_url), device.is_online, device.battery_level,
                 )
 
                 self.devices[device.device_sn] = device
