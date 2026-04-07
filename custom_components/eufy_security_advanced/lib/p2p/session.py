@@ -417,6 +417,16 @@ class P2PSession:
         if not msg:
             return
 
+        # --- HEX DUMP: incoming DATA ---
+        _LOGGER.debug(
+            "<<< RECV DATA type=%d (0x%04X) seq=%d data_len=%d\n"
+            "  raw payload (%d bytes): %s\n"
+            "  data portion: %s",
+            msg.data_type, msg.data_type, msg.sequence, len(msg.data),
+            len(payload), payload[:128].hex() + ("..." if len(payload) > 128 else ""),
+            msg.data[:128].hex() + ("..." if len(msg.data) > 128 else ""),
+        )
+
         # Send ACK immediately
         ack = build_ack(msg.data_type, msg.sequence)
         self._send_to(ack)
@@ -494,6 +504,17 @@ class P2PSession:
         self, data_type: int, header: XZYHHeader, data: bytes
     ) -> None:
         """Dispatch a fully reassembled message."""
+        # --- HEX DUMP: dispatching reassembled message ---
+        _LOGGER.debug(
+            "<<< DISPATCH data_type=%d cmd=%d (0x%04X) sign=%d ch=%d msg_type=%d\n"
+            "  XZYH: cmd=%d bytes_to_read=%d channel=%d sign_code=%d\n"
+            "  data before decrypt (%d bytes): %s",
+            data_type, header.command_id, header.command_id,
+            header.sign_code, header.channel, header.msg_type,
+            header.command_id, header.bytes_to_read, header.channel, header.sign_code,
+            len(data), data[:128].hex() + ("..." if len(data) > 128 else ""),
+        )
+
         # Decrypt if needed
         if header.sign_code > 0 and self._p2p_key:
             if data_type == P2PDataType.CONTROL:
@@ -501,6 +522,10 @@ class P2PSession:
                 data = decrypt_p2p(data, key)
             elif data_type == P2PDataType.DATA:
                 data = decrypt_p2p(data, self._p2p_key)
+            _LOGGER.debug(
+                "  data after decrypt (%d bytes): %s",
+                len(data), data[:128].hex() + ("..." if len(data) > 128 else ""),
+            )
 
         cmd = header.command_id
 
@@ -704,11 +729,17 @@ class P2PSession:
         """Handle an ACK for a sent command."""
         if len(payload) < 6:
             return
+        # --- HEX DUMP: incoming ACK ---
+        _LOGGER.debug(
+            "<<< RECV ACK raw (%d bytes): %s",
+            len(payload), payload.hex(),
+        )
         num_acks = struct.unpack(">H", payload[2:4])[0]
         for i in range(num_acks):
             offset = 4 + i * 2
             if offset + 2 <= len(payload):
                 seq = struct.unpack(">H", payload[offset : offset + 2])[0]
+                _LOGGER.debug("  ACK for seq=%d (pending=%s)", seq, seq in self._pending_commands)
                 if seq in self._pending_commands:
                     fut = self._pending_commands.pop(seq)
                     if not fut.done():
@@ -756,6 +787,20 @@ class P2PSession:
 
         seq = self._next_sequence()
         pkt = build_data_message(data_type, seq, command_type, payload)
+
+        # --- HEX DUMP: outgoing command ---
+        _LOGGER.debug(
+            ">>> SEND cmd=%d (0x%04X) seq=%d data_type=%d\n"
+            "  payload (%d bytes): %s\n"
+            "  10-byte hdr: %s\n"
+            "  payload data: %s\n"
+            "  full UDP pkt (%d bytes): %s",
+            command_type, command_type, seq, data_type,
+            len(payload), payload.hex(),
+            payload[:10].hex() if len(payload) >= 10 else payload.hex(),
+            payload[10:].hex() if len(payload) > 10 else "(none)",
+            len(pkt), pkt.hex(),
+        )
 
         # Wait for ACK
         ack_future: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
@@ -819,6 +864,21 @@ class P2PSession:
         # Build payload with CMD_SET_PAYLOAD wrapper
         cmd_payload = build_command_payload_json(payload_json, channel=channel, sign_code=sign_code)
 
+        # --- HEX DUMP: livestream command construction ---
+        _LOGGER.debug(
+            ">>> LIVESTREAM BUILD\n"
+            "  encryption_level=%s sign_code=%d\n"
+            "  admin_user_id=%s\n"
+            "  rsa_key_hex (first 32 chars)=%s...\n"
+            "  JSON (%d bytes): %s\n"
+            "  cmd_payload pre-encrypt (%d bytes): %s",
+            self._encryption_level.name, sign_code,
+            self._admin_user_id,
+            rsa_key_hex[:32],
+            len(payload_json), payload_json,
+            len(cmd_payload), cmd_payload.hex(),
+        )
+
         # Encrypt the payload if encryption is active (CMD_SET_PAYLOAD requires it)
         if sign_code > 0 and self._p2p_key:
             # The 10-byte header stays unencrypted, only the data portion is encrypted
@@ -826,6 +886,16 @@ class P2PSession:
             data = cmd_payload[10:]
             encrypted_data = encrypt_p2p(data, self._p2p_key)
             cmd_payload = header + encrypted_data
+            _LOGGER.debug(
+                "  p2p_key: %s\n"
+                "  plaintext data (%d bytes): %s\n"
+                "  encrypted data (%d bytes): %s\n"
+                "  cmd_payload post-encrypt (%d bytes): %s",
+                self._p2p_key.hex(),
+                len(data), data.hex(),
+                len(encrypted_data), encrypted_data.hex(),
+                len(cmd_payload), cmd_payload.hex(),
+            )
 
         result = await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
         if result is None:
