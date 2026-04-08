@@ -232,6 +232,12 @@ class EufyCamera(EufySecurityEntity, Camera):
         # Create anonymous pipe: ffmpeg reads from pipe_r, we write to pipe_w
         pipe_r, pipe_w = os.pipe()
 
+        # Enlarge pipe buffer to 1MB (default 64KB is too small for 64KB frames)
+        try:
+            fcntl.fcntl(pipe_w, 1031, 1_048_576)  # F_SETPIPE_SZ
+        except OSError:
+            pass  # Not supported on all platforms
+
         # Set write end to non-blocking so the P2P callback never stalls
         flags = fcntl.fcntl(pipe_w, fcntl.F_GETFL)
         fcntl.fcntl(pipe_w, fcntl.F_SETFL, flags | os.O_NONBLOCK)
@@ -273,13 +279,24 @@ class EufyCamera(EufySecurityEntity, Camera):
         )
 
         def on_data(data: StreamData) -> None:
-            """Write P2P video data to the ffmpeg pipe (non-blocking)."""
+            """Write P2P video data to the ffmpeg pipe.
+
+            Handles partial writes: os.write() on a non-blocking pipe
+            may write fewer bytes than requested for data > PIPE_BUF
+            (4096 on Linux). Loop to ensure complete frames are written.
+            """
             if not data.is_video or not data.data or self._pipe_w is None:
                 return
-            try:
-                os.write(self._pipe_w, data.data)
-            except (BlockingIOError, OSError):
-                pass
+            buf = memoryview(data.data)
+            pos = 0
+            while pos < len(buf):
+                try:
+                    n = os.write(self._pipe_w, buf[pos:])
+                    pos += n
+                except BlockingIOError:
+                    break  # pipe full, drop rest of this frame
+                except OSError:
+                    break
 
         session.set_stream_callback(on_data)
         session.set_disconnect_callback(self._on_disconnect)
