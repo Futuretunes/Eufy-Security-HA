@@ -241,16 +241,13 @@ class EufyCamera(EufySecurityEntity, Camera):
         self._pipe_w = pipe_w
 
         # ffmpeg: raw H264 → mpegts (passthrough, no re-encoding)
-        # -use_wallclock_as_timestamps: stamps each input packet with
-        # the system clock — needed because raw H264 has no timestamps
-        # and -framerate alone doesn't work with -c:v copy for mpegts.
+        # This exact arg set produced sustained streaming in v0.6.4.
         self._ffmpeg_process = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-use_wallclock_as_timestamps", "1",
-            "-fflags", "+discardcorrupt",
+            "ffmpeg", "-hide_banner", "-loglevel", "warning",
+            "-fflags", "+genpts+discardcorrupt",
+            "-framerate", "15",
             "-f", "h264", "-i", "pipe:0",
             "-c:v", "copy", "-an",
-            "-mpegts_flags", "resend_headers",
             "-f", "mpegts", "pipe:1",
             stdin=pipe_r,
             stdout=asyncio.subprocess.PIPE,
