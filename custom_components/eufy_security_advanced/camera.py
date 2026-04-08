@@ -229,26 +229,20 @@ class EufyCamera(EufySecurityEntity, Camera):
         if self._stream_url:
             return
 
-        # Create anonymous pipe: ffmpeg reads from pipe_r, we write to pipe_w
+        # Pipe: P2P callback writes H264 → ffmpeg reads
         pipe_r, pipe_w = os.pipe()
-
-        # Enlarge pipe buffer to 1MB (default 64KB is too small for 64KB frames)
         try:
-            fcntl.fcntl(pipe_w, 1031, 1_048_576)  # F_SETPIPE_SZ
+            fcntl.fcntl(pipe_w, 1031, 1_048_576)  # F_SETPIPE_SZ = 1MB
         except OSError:
-            pass  # Not supported on all platforms
+            pass
+        # Blocking write with 1MB buffer — ensures complete frames.
+        # Writes are instant since ffmpeg continuously reads.
+        self._pipe_w = pipe_w
 
-        # Set write end to non-blocking so the P2P callback never stalls
-        flags = fcntl.fcntl(pipe_w, fcntl.F_GETFL)
-        fcntl.fcntl(pipe_w, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
-        # ffmpeg: H264 in → mpegts out (with proper timestamps for Safari)
-        # -framerate: generates PTS/DTS (raw H264 has none)
-        # -video_track_timescale: Safari needs consistent timescale
-        # -mpegts_flags resend_headers: re-sends PAT/PMT so late-joining clients sync
+        # ffmpeg: raw H264 → mpegts (passthrough, no re-encoding)
         self._ffmpeg_process = await asyncio.create_subprocess_exec(
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-fflags", "+genpts+discardcorrupt+nobuffer",
+            "-fflags", "+genpts+discardcorrupt",
             "-framerate", "15",
             "-f", "h264", "-i", "pipe:0",
             "-c:v", "copy", "-an",
@@ -259,44 +253,31 @@ class EufyCamera(EufySecurityEntity, Camera):
             stderr=asyncio.subprocess.PIPE,
         )
         os.close(pipe_r)
-        self._pipe_w = pipe_w
 
-        # Start TCP server (port is open immediately — no race)
+        # TCP server for HA/go2rtc to connect to
         port = await self._find_free_port()
         self._tcp_server = await asyncio.start_server(
             self._on_tcp_client, "127.0.0.1", port,
         )
         self._stream_url = f"tcp://127.0.0.1:{port}"
 
-        # Forward ffmpeg stdout → TCP clients, and log stderr
         self._forward_task = asyncio.create_task(self._forward_ffmpeg_output())
         asyncio.create_task(self._log_ffmpeg_stderr())
 
         _LOGGER.info(
-            "Stream ready for %s at %s (ffmpeg pid=%d)",
+            "Stream ready for %s at %s (pid=%d)",
             self._device_sn, self._stream_url,
-            self._ffmpeg_process.pid if self._ffmpeg_process.pid else 0,
+            self._ffmpeg_process.pid or 0,
         )
 
         def on_data(data: StreamData) -> None:
-            """Write P2P video data to the ffmpeg pipe.
-
-            Handles partial writes: os.write() on a non-blocking pipe
-            may write fewer bytes than requested for data > PIPE_BUF
-            (4096 on Linux). Loop to ensure complete frames are written.
-            """
+            """Write complete H264 frames to ffmpeg pipe."""
             if not data.is_video or not data.data or self._pipe_w is None:
                 return
-            buf = memoryview(data.data)
-            pos = 0
-            while pos < len(buf):
-                try:
-                    n = os.write(self._pipe_w, buf[pos:])
-                    pos += n
-                except BlockingIOError:
-                    break  # pipe full, drop rest of this frame
-                except OSError:
-                    break
+            try:
+                os.write(self._pipe_w, data.data)
+            except OSError:
+                pass
 
         session.set_stream_callback(on_data)
         session.set_disconnect_callback(self._on_disconnect)
