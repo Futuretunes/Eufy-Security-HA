@@ -618,16 +618,10 @@ class P2PSession:
             return
 
         video_data = data[22:]  # After the 22-byte video header
-        frame_count = getattr(self, "_video_frame_count", 0)
-        self._video_frame_count = frame_count + 1
 
         # Decrypt if encrypted (RSA per-frame encryption)
         if sign_code > 0 and len(video_data) >= 128:
-            pre_len = len(video_data)
             video_data = decrypt_video_frame(data, self._rsa_private_key)
-            if frame_count == 0:
-                first_bytes = video_data[:16].hex() if video_data else "empty"
-                _LOGGER.info("VIDEO: RSA decrypt %d -> %d bytes, starts=%s", pre_len, len(video_data), first_bytes)
 
         if not video_data or len(video_data) > MAX_FRAME_SIZE:
             return
@@ -640,26 +634,22 @@ class P2PSession:
                 self._video_codec = VideoCodec.H265
             else:
                 self._video_codec = self._detect_video_codec(video_data)
+
+        frame_count = getattr(self, "_video_frame_count", 0)
+        self._video_frame_count = frame_count + 1
         if frame_count == 0:
             _LOGGER.info(
-                "VIDEO: first frame seq=%d kf=%s %dx%d fps=%d %s sign=%d len=%d",
-                vf.sequence, vf.is_keyframe, vf.width, vf.height,
-                vf.fps, self._video_codec.name, sign_code, len(video_data),
-            )
-        elif frame_count < 5 or vf.is_keyframe:
-            _LOGGER.debug(
-                "VIDEO: frame #%d seq=%d kf=%s len=%d",
-                frame_count, vf.sequence, vf.is_keyframe, len(video_data),
+                "VIDEO: first frame kf=%s %dx%d fps=%d %s len=%d",
+                vf.is_keyframe, vf.width, vf.height,
+                vf.fps, self._video_codec.name, len(video_data),
             )
 
         # Wait for keyframe
         if not self._got_keyframe:
             if vf.is_keyframe:
                 self._got_keyframe = True
-                _LOGGER.info("VIDEO: keyframe detected — streaming to ffmpeg")
+                _LOGGER.info("VIDEO: keyframe received, streaming started")
             else:
-                if frame_count < 3:
-                    _LOGGER.debug("VIDEO: waiting for keyframe (frame #%d kf=%s)", frame_count, vf.is_keyframe)
                 return
 
         if self._on_stream_data:
@@ -775,7 +765,6 @@ class P2PSession:
         seq = self._next_sequence()
         pkt = build_data_message(data_type, seq, command_type, payload)
 
-        _LOGGER.debug(">>> SEND cmd=%d seq=%d payload=%d bytes", command_type, seq, len(payload))
 
         # Wait for ACK
         ack_future: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
@@ -839,22 +828,14 @@ class P2PSession:
         # Build payload with CMD_SET_PAYLOAD wrapper
         cmd_payload = build_command_payload_json(payload_json, channel=channel, sign_code=sign_code)
 
-        _LOGGER.info(
-            "LIVESTREAM: encrypt=%s sign=%d json=%d bytes",
-            self._encryption_level.name, sign_code, len(payload_json),
-        )
-
-        # Encrypt the payload if encryption is active (CMD_SET_PAYLOAD requires it)
+        # Encrypt the payload if encryption is active
         if sign_code > 0 and self._p2p_key:
-            # The 10-byte header stays unencrypted, only the data portion is encrypted
             header = cmd_payload[:10]
             data = cmd_payload[10:]
             encrypted_data = encrypt_p2p(data, self._p2p_key)
-            # Update data_len in header to match encrypted size (padded to 16-byte boundary).
-            # The TypeScript client pads BEFORE writing data_len, so data_len = encrypted size.
+            # Update data_len to match encrypted (padded) size
             header = struct.pack("<H", len(encrypted_data)) + header[2:]
             cmd_payload = header + encrypted_data
-            _LOGGER.debug("LIVESTREAM: encrypted %d -> %d bytes", len(data), len(encrypted_data))
 
         result = await self.send_command(CommandType.CMD_SET_PAYLOAD, cmd_payload)
         if result is None:

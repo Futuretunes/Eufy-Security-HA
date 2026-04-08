@@ -1,13 +1,7 @@
 """Camera platform for Eufy Security devices.
 
 Still image: fetched from Eufy cloud event thumbnail URL.
-Live stream: P2P → ffmpeg (H264→mpegts) → TCP loopback → HA stream component.
-
-Stream lifecycle:
-  1. Preemptive start via push event (doorbell press / person detected), OR
-  2. On-demand start via async_turn_on() (user clicks Turn On).
-  When a stream is active, supported_features includes STREAM so the HA
-  camera card shows a live view. stream_source() returns the TCP URL lazily.
+Live stream: P2P → pipe → ffmpeg (H264→mpegts) → TCP server → HA/go2rtc.
 """
 
 from __future__ import annotations
@@ -19,7 +13,6 @@ import os
 import signal
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -243,15 +236,17 @@ class EufyCamera(EufySecurityEntity, Camera):
         flags = fcntl.fcntl(pipe_w, fcntl.F_GETFL)
         fcntl.fcntl(pipe_w, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-        # Start ffmpeg: reads H264 from pipe, writes mpegts to stdout
-        # -framerate 15: tells the raw H264 demuxer the fps so it generates
-        # proper PTS/DTS timestamps (required by the mpegts muxer)
+        # ffmpeg: H264 in → mpegts out (with proper timestamps for Safari)
+        # -framerate: generates PTS/DTS (raw H264 has none)
+        # -video_track_timescale: Safari needs consistent timescale
+        # -mpegts_flags resend_headers: re-sends PAT/PMT so late-joining clients sync
         self._ffmpeg_process = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-hide_banner", "-loglevel", "warning",
-            "-fflags", "+genpts+discardcorrupt",
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-fflags", "+genpts+discardcorrupt+nobuffer",
             "-framerate", "15",
             "-f", "h264", "-i", "pipe:0",
             "-c:v", "copy", "-an",
+            "-mpegts_flags", "resend_headers",
             "-f", "mpegts", "pipe:1",
             stdin=pipe_r,
             stdout=asyncio.subprocess.PIPE,
@@ -277,23 +272,14 @@ class EufyCamera(EufySecurityEntity, Camera):
             self._ffmpeg_process.pid if self._ffmpeg_process.pid else 0,
         )
 
-        _frames_written = [0]
-
         def on_data(data: StreamData) -> None:
             """Write P2P video data to the ffmpeg pipe (non-blocking)."""
-            if not data.is_video or not data.data:
-                return
-            if self._pipe_w is None:
+            if not data.is_video or not data.data or self._pipe_w is None:
                 return
             try:
                 os.write(self._pipe_w, data.data)
-                _frames_written[0] += 1
-                if _frames_written[0] in (1, 10, 100):
-                    _LOGGER.info("PIPE: wrote %d frames to ffmpeg", _frames_written[0])
-            except BlockingIOError:
-                pass  # pipe full — ffmpeg can't keep up, drop frame
-            except OSError:
-                pass  # pipe broken
+            except (BlockingIOError, OSError):
+                pass
 
         session.set_stream_callback(on_data)
         session.set_disconnect_callback(self._on_disconnect)
@@ -334,7 +320,7 @@ class EufyCamera(EufySecurityEntity, Camera):
             _LOGGER.debug("Forward task ended", exc_info=True)
 
     async def _log_ffmpeg_stderr(self) -> None:
-        """Log ffmpeg stderr output to diagnose H264 parsing issues."""
+        """Log ffmpeg stderr to debug level."""
         if not self._ffmpeg_process or not self._ffmpeg_process.stderr:
             return
         try:
@@ -344,11 +330,9 @@ class EufyCamera(EufySecurityEntity, Camera):
                     break
                 text = line.decode("utf-8", errors="replace").rstrip()
                 if text:
-                    _LOGGER.warning("ffmpeg: %s", text)
-        except asyncio.CancelledError:
+                    _LOGGER.debug("ffmpeg: %s", text)
+        except (asyncio.CancelledError, Exception):
             return
-        except Exception:
-            pass
 
     async def _cleanup_ffmpeg(self) -> None:
         """Tear down ffmpeg, TCP server, and pipe."""
