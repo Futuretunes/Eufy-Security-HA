@@ -235,15 +235,19 @@ class EufyCamera(EufySecurityEntity, Camera):
             fcntl.fcntl(pipe_w, 1031, 1_048_576)  # F_SETPIPE_SZ = 1MB
         except OSError:
             pass
-        # Blocking write with 1MB buffer — ensures complete frames.
-        # Writes are instant since ffmpeg continuously reads.
+        # Non-blocking so the P2P callback never stalls the event loop
+        flags = fcntl.fcntl(pipe_w, fcntl.F_GETFL)
+        fcntl.fcntl(pipe_w, fcntl.F_SETFL, flags | os.O_NONBLOCK)
         self._pipe_w = pipe_w
 
         # ffmpeg: raw H264 → mpegts (passthrough, no re-encoding)
+        # -use_wallclock_as_timestamps: stamps each input packet with
+        # the system clock — needed because raw H264 has no timestamps
+        # and -framerate alone doesn't work with -c:v copy for mpegts.
         self._ffmpeg_process = await asyncio.create_subprocess_exec(
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-fflags", "+genpts+discardcorrupt",
-            "-framerate", "15",
+            "-use_wallclock_as_timestamps", "1",
+            "-fflags", "+discardcorrupt",
             "-f", "h264", "-i", "pipe:0",
             "-c:v", "copy", "-an",
             "-mpegts_flags", "resend_headers",
@@ -271,13 +275,19 @@ class EufyCamera(EufySecurityEntity, Camera):
         )
 
         def on_data(data: StreamData) -> None:
-            """Write complete H264 frames to ffmpeg pipe."""
+            """Write H264 frames to ffmpeg pipe (non-blocking, handles partial writes)."""
             if not data.is_video or not data.data or self._pipe_w is None:
                 return
-            try:
-                os.write(self._pipe_w, data.data)
-            except OSError:
-                pass
+            buf = memoryview(data.data)
+            pos = 0
+            while pos < len(buf):
+                try:
+                    n = os.write(self._pipe_w, buf[pos:])
+                    pos += n
+                except BlockingIOError:
+                    break  # pipe full, drop remainder
+                except OSError:
+                    break
 
         session.set_stream_callback(on_data)
         session.set_disconnect_callback(self._on_disconnect)
