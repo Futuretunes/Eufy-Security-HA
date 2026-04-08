@@ -130,9 +130,6 @@ class P2PSession:
         self._audio_codec = AudioCodec.UNKNOWN
         self._is_streaming = False
         self._got_keyframe = False
-        # Video frame reassembly: large frames span multiple XZYH messages
-        self._video_frame_buf: bytes = b""
-        self._video_frame_expected: int = 0  # data_length from video header
 
         # Callbacks
         self._on_stream_data: Callable[[StreamData], None] | None = None
@@ -518,7 +515,7 @@ class P2PSession:
         # ----- VIDEO stream -----
         elif data_type == P2PDataType.VIDEO:
             if cmd == CommandType.CMD_VIDEO_FRAME:
-                self._accumulate_video_chunk(data, header.sign_code)
+                self._handle_video_frame(data, header.sign_code)
             elif cmd == CommandType.CMD_AUDIO_FRAME:
                 self._handle_audio_frame(data)
 
@@ -613,33 +610,6 @@ class P2PSession:
 
     # ----- Video/Audio streaming -----
 
-    def _accumulate_video_chunk(self, data: bytes, sign_code: int) -> None:
-        """Accumulate XZYH video chunks into complete frames.
-
-        Large video frames span multiple XZYH messages (~64KB each).
-        The first chunk contains a 22-byte video header with data_length
-        (total frame size). Subsequent chunks are raw continuation data.
-        Dispatch the complete frame once data_length bytes are collected.
-        """
-        if self._video_frame_expected == 0:
-            # First chunk of a new frame — parse video header
-            if len(data) < 22:
-                return
-            data_length = struct.unpack("<I", data[0:4])[0]
-            self._video_frame_expected = data_length + 22  # header + payload
-            self._video_frame_buf = data
-            self._video_sign_code = sign_code
-        else:
-            # Continuation chunk — append raw data
-            self._video_frame_buf += data
-
-        if len(self._video_frame_buf) >= self._video_frame_expected:
-            # Frame complete — dispatch
-            frame = self._video_frame_buf[:self._video_frame_expected]
-            self._video_frame_buf = b""
-            self._video_frame_expected = 0
-            self._handle_video_frame(frame, getattr(self, "_video_sign_code", sign_code))
-
     def _handle_video_frame(self, data: bytes, sign_code: int) -> None:
         """Handle a video frame."""
         vf = VideoFrameHeader.parse(data)
@@ -666,11 +636,11 @@ class P2PSession:
 
         frame_count = getattr(self, "_video_frame_count", 0)
         self._video_frame_count = frame_count + 1
-        if frame_count == 0:
+        if frame_count < 3:
             _LOGGER.info(
-                "VIDEO: first frame kf=%s %dx%d fps=%d %s len=%d",
-                vf.is_keyframe, vf.width, vf.height,
-                vf.fps, self._video_codec.name, len(video_data),
+                "VIDEO #%d: hdr_len=%d actual=%d decrypt=%d kf=%s %dx%d fps=%d %s",
+                frame_count, vf.data_length, len(data) - 22, len(video_data),
+                vf.is_keyframe, vf.width, vf.height, vf.fps, self._video_codec.name,
             )
 
         # Wait for keyframe
