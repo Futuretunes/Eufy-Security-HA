@@ -325,7 +325,11 @@ class EufyCamera(EufySecurityEntity, Camera):
         except asyncio.CancelledError:
             return
         except Exception:
-            _LOGGER.debug("Forward task ended", exc_info=True)
+            pass
+        finally:
+            # ffmpeg ended — clean up the whole stream pipeline
+            _LOGGER.info("Stream ended for %s", self._device_sn)
+            self.hass.async_create_task(self._stop_stream())
 
     async def _log_ffmpeg_stderr(self) -> None:
         """Log ffmpeg stderr to debug level."""
@@ -341,6 +345,22 @@ class EufyCamera(EufySecurityEntity, Camera):
                     _LOGGER.debug("ffmpeg: %s", text)
         except (asyncio.CancelledError, Exception):
             return
+
+    async def _stop_stream(self) -> None:
+        """Stop the full stream pipeline: P2P session + ffmpeg + TCP."""
+        if self._p2p_session:
+            d = self._device
+            try:
+                await self._p2p_session.stop_livestream(channel=d.device_channel if d else 0)
+            except Exception:
+                pass
+            try:
+                await self._p2p_session.disconnect()
+            except Exception:
+                pass
+            self._p2p_session = None
+        await self._cleanup_ffmpeg()
+        self.async_write_ha_state()
 
     async def _cleanup_ffmpeg(self) -> None:
         """Tear down ffmpeg, TCP server, and pipe."""

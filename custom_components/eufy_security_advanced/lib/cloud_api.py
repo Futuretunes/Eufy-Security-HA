@@ -483,11 +483,6 @@ class EufyCloudApi:
             raw_data = []
         else:
             _LOGGER.info("Device list: %d devices found", len(raw_data))
-            # Dump ALL keys of the first device so we know the exact field names
-            if raw_data:
-                first = raw_data[0]
-                _LOGGER.info("First device ALL keys: %s", list(first.keys()) if isinstance(first, dict) else type(first).__name__)
-                _LOGGER.info("First device data: %s", {k: repr(str(v))[:80] for k, v in first.items()} if isinstance(first, dict) else repr(str(first))[:300])
 
         devices: list[DeviceData] = []
         for raw in raw_data:

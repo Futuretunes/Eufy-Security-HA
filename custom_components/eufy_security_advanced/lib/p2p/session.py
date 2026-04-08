@@ -634,20 +634,14 @@ class P2PSession:
             else:
                 self._video_codec = self._detect_video_codec(video_data)
 
-        frame_count = getattr(self, "_video_frame_count", 0)
-        self._video_frame_count = frame_count + 1
-        if frame_count < 3:
-            _LOGGER.info(
-                "VIDEO #%d: hdr_len=%d actual=%d decrypt=%d kf=%s %dx%d fps=%d %s",
-                frame_count, vf.data_length, len(data) - 22, len(video_data),
-                vf.is_keyframe, vf.width, vf.height, vf.fps, self._video_codec.name,
-            )
-
-        # Wait for keyframe
+        # Wait for keyframe before streaming
         if not self._got_keyframe:
             if vf.is_keyframe:
                 self._got_keyframe = True
-                _LOGGER.info("VIDEO: keyframe received, streaming started")
+                _LOGGER.info(
+                    "VIDEO: streaming %dx%d %dfps %s",
+                    vf.width, vf.height, vf.fps, self._video_codec.name,
+                )
             else:
                 return
 
